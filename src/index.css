@@ -1,0 +1,81 @@
+        @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+
+        .rz-app {
+          --paper: #EEF1E7;
+          --ink: #1E2B23;
+          --emerald: #1B5E4F;
+          --brick: #A83B2E;
+          --gold: #B8873A;
+          --paper-alt: color-mix(in srgb, var(--paper), var(--ink) 8%);
+          --ink-soft: color-mix(in srgb, var(--ink), var(--paper) 35%);
+          --line: color-mix(in srgb, var(--paper), var(--ink) 20%);
+          --emerald-soft: color-mix(in srgb, var(--emerald), white 82%);
+          --brick-soft: color-mix(in srgb, var(--brick), white 82%);
+          --gold-soft: color-mix(in srgb, var(--gold), white 82%);
+          font-family: 'Inter', sans-serif;
+          background: var(--paper);
+          color: var(--ink);
+        }
+        .rz-display { font-family: 'Fraunces', serif; }
+        .rz-mono { font-family: 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; }
+
+        .rz-sidebar { background: var(--ink); }
+        .rz-nav-item { color: #C7D3C9; transition: background .15s, color .15s; }
+        .rz-nav-item:hover { background: rgba(255,255,255,0.06); color: #fff; }
+        .rz-nav-item.active { background: var(--paper); color: var(--ink); }
+
+        .rz-card { background: #fff; border: 1px solid var(--line); border-radius: 10px; }
+        .rz-ruled {
+          background-image: repeating-linear-gradient(to bottom, transparent, transparent 47px, var(--line) 48px);
+          background-position: 0 4px;
+        }
+
+        .rz-input {
+          background: #fff; border: 1px solid var(--line); border-radius: 8px;
+          padding: 8px 12px; color: var(--ink); font-family: 'Inter', sans-serif;
+          width: 100%; outline: none;
+        }
+        .rz-input:focus { border-color: var(--emerald); box-shadow: 0 0 0 3px var(--emerald-soft); }
+
+        .rz-btn-primary {
+          background: var(--ink); color: var(--paper); border-radius: 8px;
+          padding: 9px 16px; font-weight: 600; transition: opacity .15s;
+        }
+        .rz-btn-primary:hover { opacity: .85; }
+        .rz-btn-ghost {
+          background: transparent; color: var(--ink-soft); border: 1px solid var(--line);
+          border-radius: 8px; padding: 9px 16px; font-weight: 600; transition: background .15s;
+        }
+        .rz-btn-ghost:hover { background: var(--paper-alt); }
+
+        .rz-toggle { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; display: flex; }
+        .rz-toggle button { flex: 1; padding: 8px 0; font-weight: 600; font-size: 0.875rem; }
+        .rz-toggle .receita-on { background: var(--emerald); color: #fff; }
+        .rz-toggle .despesa-on { background: var(--brick); color: #fff; }
+        .rz-toggle .off { background: #fff; color: var(--ink-soft); }
+
+        .rz-stamp {
+          border: 1.5px solid; border-radius: 6px;
+          font-family: 'IBM Plex Mono', monospace; letter-spacing: .04em; text-transform: uppercase;
+          font-size: 0.6rem; padding: 3px 8px; font-weight: 600; white-space: nowrap;
+          display: inline-flex; align-items: center; justify-content: center;
+        }
+        .rz-stamp-pago { color: var(--emerald); border-color: var(--emerald); background: var(--emerald-soft); }
+        .rz-stamp-pendente { color: var(--gold); border-color: var(--gold); background: var(--gold-soft); }
+        .rz-stamp-atrasada { color: var(--brick); border-color: var(--brick); background: var(--brick-soft); }
+        .rz-stamp-neutro { color: var(--ink-soft); border-color: var(--line); background: #fff; }
+
+        .rz-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+
+        .rz-progress-track { background: var(--paper-alt); border-radius: 999px; height: 8px; overflow: hidden; }
+        .rz-progress-fill { height: 100%; border-radius: 999px; transition: width .25s ease; }
+
+        .rz-focus:focus-visible { outline: 2px solid var(--emerald); outline-offset: 2px; }
+
+        @media (prefers-reduced-motion: reduce) {
+          .rz-app * { transition: none !important; animation: none !important; }
+        }

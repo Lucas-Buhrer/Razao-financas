@@ -1,0 +1,2374 @@
+import { useState, useEffect, useMemo, useRef } from "react";
+import {
+  BookOpen, Home, Receipt, Repeat, Target, BarChart3,
+  Plus, Trash2, Pencil, X, Check, Search, ChevronLeft, ChevronRight,
+  TrendingUp, TrendingDown, Scale, Undo2, Menu, AlertCircle, PauseCircle, PlayCircle,
+  PiggyBank, Minus, PartyPopper, History, Settings, RotateCcw, LogOut,
+} from "lucide-react";
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  PieChart, Pie, Cell, BarChart, Bar, Legend,
+} from "recharts";
+import { storage } from "./storage";
+import { supabase } from "./supabaseClient";
+
+/* ---------------------------------------------------------
+   RAZÃO — Controle Financeiro Pessoal
+   Etapa 1: Estrutura base + Navegação + Lançamentos + Persistência
+--------------------------------------------------------- */
+
+const CATEGORIES = {
+  receita: [
+    { id: "salario", label: "Salário", color: "#1B5E4F" },
+    { id: "freelance", label: "Freelance", color: "#2E7D63" },
+    { id: "investimentos", label: "Investimentos", color: "#3E8E75" },
+    { id: "outros_receita", label: "Outros", color: "#6FA88F" },
+  ],
+  despesa: [
+    { id: "moradia", label: "Moradia", color: "#A83B2E" },
+    { id: "alimentacao", label: "Alimentação", color: "#B8562A" },
+    { id: "transporte", label: "Transporte", color: "#C17A3A" },
+    { id: "saude", label: "Saúde", color: "#9C4A56" },
+    { id: "lazer", label: "Lazer", color: "#B8873A" },
+    { id: "educacao", label: "Educação", color: "#7A6A9E" },
+    { id: "assinaturas", label: "Assinaturas", color: "#8A5A7A" },
+    { id: "outros_despesa", label: "Outros", color: "#9A8A7A" },
+  ],
+};
+
+const DEFAULT_BANKS = [
+  { id: "carteira", label: "Carteira", color: "#6B5B3E" },
+  { id: "conta_corrente", label: "Conta Corrente", color: "#4A6FA5" },
+  { id: "poupanca", label: "Poupança", color: "#3A7A8C" },
+  { id: "cartao_credito", label: "Cartão de Crédito", color: "#7A6A9E" },
+];
+
+const NAV_ITEMS = [
+  { id: "visao-geral", label: "Visão Geral", icon: Home, ready: true },
+  { id: "lancamentos", label: "Lançamentos", icon: Receipt, ready: true },
+  { id: "fixas", label: "Contas Fixas", icon: Repeat, ready: true },
+  { id: "orcamento", label: "Orçamento", icon: Target, ready: true },
+  { id: "metas", label: "Metas", icon: PiggyBank, ready: true },
+  { id: "relatorios", label: "Relatórios", icon: BarChart3, ready: true },
+  { id: "config", label: "Configurações", icon: Settings, ready: true },
+];
+
+const MONTHS = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+
+const COLOR_PALETTE = [
+  "#1B5E4F", "#2E7D63", "#3E8E75", "#6FA88F", "#4A6FA5", "#3A7A8C",
+  "#A83B2E", "#B8562A", "#C17A3A", "#9C4A56", "#B8873A", "#7A6A9E", "#8A5A7A", "#6B5B3E",
+];
+
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const todayISO = () => new Date().toISOString().slice(0, 10);
+const formatCurrency = (v) => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(Number(v) || 0);
+const formatDateBR = (iso) => { const [y,m,d] = iso.split("-"); return `${d}/${m}/${y}`; };
+
+const emptyForm = { description: "", amount: "", date: todayISO(), type: "despesa", category: "", account: "", status: "pago", installments: false, installmentCount: "2" };
+
+function dateToISO(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function addMonthsToDateISO(dateISO, months) {
+  const [y, m, d] = dateISO.split("-").map(Number);
+  const target = new Date(y, m - 1 + months, 1);
+  const daysInTarget = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  target.setDate(Math.min(d, daysInTarget));
+  return dateToISO(target);
+}
+const emptyFixedForm = { description: "", amount: "", type: "despesa", category: "", account: "", dueDay: "5" };
+const emptyGoalForm = { title: "", targetAmount: "", deadline: "", color: COLOR_PALETTE[0] };
+
+const DEFAULT_THEME = { paper: "#eef1e7", ink: "#1e2b23", emerald: "#1b5e4f", brick: "#a83b2e", gold: "#b8873a" };
+const THEME_PRESETS = [
+  { name: "Razão Clássico", colors: DEFAULT_THEME },
+  { name: "Noturno Azul", colors: { paper: "#e8edf2", ink: "#16202b", emerald: "#2a5c8a", brick: "#a8453a", gold: "#b6893e" } },
+  { name: "Vinho", colors: { paper: "#f3eae5", ink: "#2b1a18", emerald: "#5f6b35", brick: "#7a2e3a", gold: "#b8873a" } },
+  { name: "Ardósia", colors: { paper: "#eceef0", ink: "#20262b", emerald: "#3a7a6e", brick: "#a14a3c", gold: "#a68a4a" } },
+];
+
+const FIXED_STATUS_LABEL = { lancada: "Lançada", vencendo: "Vence em breve", atrasada: "Atrasada", a_vencer: "A vencer" };
+const FIXED_STATUS_CLASS = { lancada: "rz-stamp-pago", vencendo: "rz-stamp-pendente", atrasada: "rz-stamp-atrasada", a_vencer: "rz-stamp-neutro" };
+
+function periodKeyOf(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+// Valores de contas fixas podem mudar ao longo do tempo (ex: aluguel reajustado).
+// amountHistory guarda { period: "YYYY-MM", amount } e usamos o valor vigente
+// no período consultado, sem alterar meses já passados.
+function getAmountForPeriod(bill, refDate) {
+  const period = periodKeyOf(refDate);
+  const history = bill.amountHistory && bill.amountHistory.length > 0
+    ? bill.amountHistory
+    : [{ period: "0000-01", amount: bill.amount || 0 }];
+  const sorted = [...history].sort((a, b) => a.period.localeCompare(b.period));
+  let applicable = sorted[0];
+  for (const entry of sorted) {
+    if (entry.period <= period) applicable = entry;
+    else break;
+  }
+  return applicable.amount;
+}
+
+function buildCashFlowProjection(transactions, fixedBills, horizonDays) {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const baseline = transactions.filter((t) => t.status === "pago").reduce((s, t) => s + (t.type === "receita" ? t.amount : -t.amount), 0);
+
+  const events = [];
+
+  transactions.forEach((t) => {
+    if (t.status !== "pendente") return;
+    const d = new Date(t.date + "T00:00:00");
+    const diffDays = Math.round((d - today) / 86400000);
+    if (diffDays >= 0 && diffDays <= horizonDays) {
+      events.push({ date: d, amount: t.type === "receita" ? t.amount : -t.amount });
+    }
+  });
+
+  const monthsToScan = Math.ceil(horizonDays / 28) + 1;
+  for (let i = 0; i < monthsToScan; i++) {
+    const monthDate = new Date(today.getFullYear(), today.getMonth() + i, 1);
+    const period = periodKeyOf(monthDate);
+    fixedBills.filter((b) => b.active).forEach((bill) => {
+      const already = transactions.some((t) => t.recurringId === bill.id && t.recurringPeriod === period);
+      if (already) return;
+      const daysInMonth = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0).getDate();
+      const day = Math.min(bill.dueDay, daysInMonth);
+      const dueDate = new Date(monthDate.getFullYear(), monthDate.getMonth(), day);
+      const diffDays = Math.round((dueDate - today) / 86400000);
+      if (diffDays <= horizonDays) {
+        const amount = getAmountForPeriod(bill, monthDate);
+        events.push({ date: dueDate, amount: bill.type === "receita" ? amount : -amount });
+      }
+    });
+  }
+
+  const dailyBalances = [];
+  let running = baseline;
+  for (let d = 0; d <= horizonDays; d++) {
+    const pointDate = new Date(today.getFullYear(), today.getMonth(), today.getDate() + d);
+    events.forEach((e) => { if (e.date.getTime() === pointDate.getTime()) running += e.amount; });
+    dailyBalances.push({ date: pointDate, saldo: running });
+  }
+
+  const totalIn = events.filter((e) => e.amount > 0).reduce((s, e) => s + e.amount, 0);
+  const totalOut = events.filter((e) => e.amount < 0).reduce((s, e) => s + Math.abs(e.amount), 0);
+
+  const step = Math.max(1, Math.floor((horizonDays + 1) / 20));
+  const chartData = dailyBalances
+    .filter((_, i) => i % step === 0 || i === dailyBalances.length - 1)
+    .map((p) => ({ dia: `${String(p.date.getDate()).padStart(2, "0")}/${String(p.date.getMonth() + 1).padStart(2, "0")}`, saldo: p.saldo }));
+
+  return { baseline, final: dailyBalances[dailyBalances.length - 1].saldo, totalIn, totalOut, chartData };
+}
+
+function enrichFixedBills(fixedBills, transactions, refDate) {
+  const periodKey = periodKeyOf(refDate);
+  const daysInMonth = new Date(refDate.getFullYear(), refDate.getMonth() + 1, 0).getDate();
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  return fixedBills.map((bill) => {
+    const day = Math.min(bill.dueDay, daysInMonth);
+    const dueDate = new Date(refDate.getFullYear(), refDate.getMonth(), day);
+    const launchedTx = transactions.find((t) => t.recurringId === bill.id && t.recurringPeriod === periodKey);
+    let status = "a_vencer";
+    if (launchedTx) status = "lancada";
+    else if (dueDate < today) status = "atrasada";
+    else if ((dueDate - today) / 86400000 <= 5) status = "vencendo";
+    return { ...bill, amount: getAmountForPeriod(bill, refDate), day, launchedTx, status };
+  });
+}
+
+export default function App() {
+  const [activeTab, setActiveTab] = useState("lancamentos");
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  const [theme, setTheme] = useState(DEFAULT_THEME);
+  const [themeLoaded, setThemeLoaded] = useState(false);
+
+  const [transactions, setTransactions] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+
+  const [customCategories, setCustomCategories] = useState([]);
+  const [categoriesLoaded, setCategoriesLoaded] = useState(false);
+  const [categoryForm, setCategoryForm] = useState({ label: "", type: "despesa", color: COLOR_PALETTE[0] });
+  const [categoryError, setCategoryError] = useState("");
+  const [hiddenDefaultCategories, setHiddenDefaultCategories] = useState([]);
+
+  const [customBanks, setCustomBanks] = useState([]);
+  const [banksLoaded, setBanksLoaded] = useState(false);
+  const [bankForm, setBankForm] = useState({ label: "", color: COLOR_PALETTE[0] });
+  const [bankError, setBankError] = useState("");
+  const [hiddenDefaultBanks, setHiddenDefaultBanks] = useState([]);
+
+  const [fixedBills, setFixedBills] = useState([]);
+  const [fixedBillsLoaded, setFixedBillsLoaded] = useState(false);
+  const [fixedForm, setFixedForm] = useState(emptyFixedForm);
+  const [showFixedForm, setShowFixedForm] = useState(false);
+  const [editingFixedId, setEditingFixedId] = useState(null);
+  const [fixedFormError, setFixedFormError] = useState("");
+
+  const [budgets, setBudgets] = useState([]);
+  const [budgetsLoaded, setBudgetsLoaded] = useState(false);
+  const [budgetForm, setBudgetForm] = useState({ categoryId: "", limit: "" });
+  const [budgetError, setBudgetError] = useState("");
+
+  const [goals, setGoals] = useState([]);
+  const [goalsLoaded, setGoalsLoaded] = useState(false);
+  const [goalForm, setGoalForm] = useState(emptyGoalForm);
+  const [showGoalForm, setShowGoalForm] = useState(false);
+  const [editingGoalId, setEditingGoalId] = useState(null);
+  const [goalError, setGoalError] = useState("");
+
+  const [form, setForm] = useState(emptyForm);
+  const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [formError, setFormError] = useState("");
+
+  const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState("todos");
+  const [categoryFilter, setCategoryFilter] = useState("todas");
+  const [periodMode, setPeriodMode] = useState("mes");
+  const [refDate, setRefDate] = useState(new Date());
+
+  const [toast, setToast] = useState(null);
+  const toastTimer = useRef(null);
+
+  // ---------- Load theme ----------
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await storage.get("tema_cores", false);
+        setTheme(res && res.value ? { ...DEFAULT_THEME, ...JSON.parse(res.value) } : DEFAULT_THEME);
+      } catch (e) {
+        setTheme(DEFAULT_THEME);
+      } finally {
+        setThemeLoaded(true);
+      }
+    })();
+  }, []);
+
+  // ---------- Save theme ----------
+  useEffect(() => {
+    if (!themeLoaded) return;
+    (async () => {
+      try {
+        await storage.set("tema_cores", JSON.stringify(theme), false);
+      } catch (e) {
+        setLoadError(true);
+      }
+    })();
+  }, [theme, themeLoaded]);
+
+  // ---------- Load from persistent storage ----------
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await storage.get("lancamentos", false);
+        setTransactions(res && res.value ? JSON.parse(res.value) : []);
+      } catch (e) {
+        setTransactions([]);
+        setLoadError(false); // key simply doesn't exist yet — not a real error
+      } finally {
+        setLoaded(true);
+      }
+    })();
+  }, []);
+
+  // ---------- Save on every change ----------
+  useEffect(() => {
+    if (!loaded) return;
+    (async () => {
+      try {
+        const result = await storage.set("lancamentos", JSON.stringify(transactions), false);
+        if (!result) setLoadError(true);
+      } catch (e) {
+        setLoadError(true);
+      }
+    })();
+  }, [transactions, loaded]);
+
+  // ---------- Load custom categories ----------
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await storage.get("categorias_personalizadas", false);
+        setCustomCategories(res && res.value ? JSON.parse(res.value) : []);
+      } catch (e) {
+        setCustomCategories([]);
+      } finally {
+        setCategoriesLoaded(true);
+      }
+    })();
+  }, []);
+
+  // ---------- Save custom categories ----------
+  useEffect(() => {
+    if (!categoriesLoaded) return;
+    (async () => {
+      try {
+        await storage.set("categorias_personalizadas", JSON.stringify(customCategories), false);
+      } catch (e) {
+        setLoadError(true);
+      }
+    })();
+  }, [customCategories, categoriesLoaded]);
+
+  // ---------- Load/save hidden default categories ----------
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await storage.get("categorias_padrao_ocultas", false);
+        setHiddenDefaultCategories(res && res.value ? JSON.parse(res.value) : []);
+      } catch (e) {
+        setHiddenDefaultCategories([]);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!categoriesLoaded) return;
+    (async () => {
+      try {
+        await storage.set("categorias_padrao_ocultas", JSON.stringify(hiddenDefaultCategories), false);
+      } catch (e) {
+        setLoadError(true);
+      }
+    })();
+  }, [hiddenDefaultCategories, categoriesLoaded]);
+
+  // ---------- Load custom banks ----------
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await storage.get("bancos_personalizados", false);
+        setCustomBanks(res && res.value ? JSON.parse(res.value) : []);
+      } catch (e) {
+        setCustomBanks([]);
+      } finally {
+        setBanksLoaded(true);
+      }
+    })();
+  }, []);
+
+  // ---------- Save custom banks ----------
+  useEffect(() => {
+    if (!banksLoaded) return;
+    (async () => {
+      try {
+        await storage.set("bancos_personalizados", JSON.stringify(customBanks), false);
+      } catch (e) {
+        setLoadError(true);
+      }
+    })();
+  }, [customBanks, banksLoaded]);
+
+  // ---------- Load/save hidden default banks ----------
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await storage.get("bancos_padrao_ocultos", false);
+        setHiddenDefaultBanks(res && res.value ? JSON.parse(res.value) : []);
+      } catch (e) {
+        setHiddenDefaultBanks([]);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!banksLoaded) return;
+    (async () => {
+      try {
+        await storage.set("bancos_padrao_ocultos", JSON.stringify(hiddenDefaultBanks), false);
+      } catch (e) {
+        setLoadError(true);
+      }
+    })();
+  }, [hiddenDefaultBanks, banksLoaded]);
+
+  // ---------- Load fixed bills ----------
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await storage.get("contas_fixas", false);
+        setFixedBills(res && res.value ? JSON.parse(res.value) : []);
+      } catch (e) {
+        setFixedBills([]);
+      } finally {
+        setFixedBillsLoaded(true);
+      }
+    })();
+  }, []);
+
+  // ---------- Save fixed bills ----------
+  useEffect(() => {
+    if (!fixedBillsLoaded) return;
+    (async () => {
+      try {
+        await storage.set("contas_fixas", JSON.stringify(fixedBills), false);
+      } catch (e) {
+        setLoadError(true);
+      }
+    })();
+  }, [fixedBills, fixedBillsLoaded]);
+
+  // ---------- Load budgets ----------
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await storage.get("orcamentos", false);
+        setBudgets(res && res.value ? JSON.parse(res.value) : []);
+      } catch (e) {
+        setBudgets([]);
+      } finally {
+        setBudgetsLoaded(true);
+      }
+    })();
+  }, []);
+
+  // ---------- Save budgets ----------
+  useEffect(() => {
+    if (!budgetsLoaded) return;
+    (async () => {
+      try {
+        await storage.set("orcamentos", JSON.stringify(budgets), false);
+      } catch (e) {
+        setLoadError(true);
+      }
+    })();
+  }, [budgets, budgetsLoaded]);
+
+  // ---------- Load goals ----------
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await storage.get("metas", false);
+        setGoals(res && res.value ? JSON.parse(res.value) : []);
+      } catch (e) {
+        setGoals([]);
+      } finally {
+        setGoalsLoaded(true);
+      }
+    })();
+  }, []);
+
+  // ---------- Save goals ----------
+  useEffect(() => {
+    if (!goalsLoaded) return;
+    (async () => {
+      try {
+        await storage.set("metas", JSON.stringify(goals), false);
+      } catch (e) {
+        setLoadError(true);
+      }
+    })();
+  }, [goals, goalsLoaded]);
+
+  // ---------- Toast auto-dismiss ----------
+  useEffect(() => {
+    if (!toast) return;
+    toastTimer.current = setTimeout(() => setToast(null), 5000);
+    return () => clearTimeout(toastTimer.current);
+  }, [toast]);
+
+  // ---------- Derived data ----------
+  const categoriesByType = useMemo(() => ({
+    receita: [...CATEGORIES.receita.filter((c) => !hiddenDefaultCategories.includes(c.id)), ...customCategories.filter((c) => c.type === "receita")],
+    despesa: [...CATEGORIES.despesa.filter((c) => !hiddenDefaultCategories.includes(c.id)), ...customCategories.filter((c) => c.type === "despesa")],
+  }), [customCategories, hiddenDefaultCategories]);
+
+  const findCategory = (type, id) => {
+    const allTypeCats = [...(CATEGORIES[type] || []), ...customCategories.filter((c) => c.type === type)];
+    return allTypeCats.find((c) => c.id === id) || { label: id, color: "#9A8A7A" };
+  };
+
+  const banksList = useMemo(() => [...DEFAULT_BANKS.filter((b) => !hiddenDefaultBanks.includes(b.id)), ...customBanks], [customBanks, hiddenDefaultBanks]);
+  const findBank = (id) => [...DEFAULT_BANKS, ...customBanks].find((b) => b.id === id);
+
+  const periodFiltered = useMemo(() => {
+    if (periodMode === "todos") return transactions;
+    const y = refDate.getFullYear(), m = refDate.getMonth();
+    return transactions.filter((t) => {
+      const d = new Date(t.date + "T00:00:00");
+      return d.getFullYear() === y && d.getMonth() === m;
+    });
+  }, [transactions, periodMode, refDate]);
+
+  const visibleTransactions = useMemo(() => {
+    return periodFiltered
+      .filter((t) => (typeFilter === "todos" ? true : t.type === typeFilter))
+      .filter((t) => (categoryFilter === "todas" ? true : t.category === categoryFilter))
+      .filter((t) => t.description.toLowerCase().includes(search.toLowerCase()))
+      .sort((a, b) => (a.date < b.date ? 1 : -1));
+  }, [periodFiltered, typeFilter, categoryFilter, search]);
+
+  const totals = useMemo(() => {
+    const receitas = periodFiltered.filter((t) => t.type === "receita").reduce((s, t) => s + Number(t.amount), 0);
+    const despesas = periodFiltered.filter((t) => t.type === "despesa").reduce((s, t) => s + Number(t.amount), 0);
+    return { receitas, despesas, saldo: receitas - despesas };
+  }, [periodFiltered]);
+
+  // ---------- Handlers ----------
+  const resetForm = () => { setForm(emptyForm); setEditingId(null); setFormError(""); };
+
+  const openNewForm = () => { resetForm(); setShowForm(true); };
+
+  const openEditForm = (t) => {
+    setForm({ description: t.description, amount: String(t.amount), date: t.date, type: t.type, category: t.category, account: t.account || "", status: t.status });
+    setEditingId(t.id);
+    setShowForm(true);
+  };
+
+  const handleTypeChange = (type) => {
+    setForm((f) => ({ ...f, type, category: "", installments: type === "despesa" ? f.installments : false }));
+  };
+
+  const handleSubmit = () => {
+    const amountNum = parseFloat(String(form.amount).replace(",", "."));
+    if (!form.description.trim()) { setFormError("Dê uma descrição para o lançamento."); return; }
+    if (!amountNum || amountNum <= 0) { setFormError("Informe um valor maior que zero."); return; }
+    if (!form.date) { setFormError("Selecione uma data."); return; }
+    if (!form.category) { setFormError("Selecione uma categoria."); return; }
+
+    if (!editingId && form.type === "despesa" && form.installments) {
+      const count = parseInt(form.installmentCount, 10);
+      if (!count || count < 2) { setFormError("Informe pelo menos 2 parcelas."); return; }
+      const perInstallment = Math.round((amountNum / count) * 100) / 100;
+      const lastAmount = Math.round((amountNum - perInstallment * (count - 1)) * 100) / 100;
+      const groupId = uid();
+      const newTxs = [];
+      for (let i = 0; i < count; i++) {
+        newTxs.push({
+          id: uid(),
+          description: `${form.description} (${i + 1}/${count})`,
+          amount: i === count - 1 ? lastAmount : perInstallment,
+          date: addMonthsToDateISO(form.date, i),
+          type: form.type, category: form.category, account: form.account,
+          status: i === 0 ? form.status : "pendente",
+          installmentGroupId: groupId, installmentIndex: i + 1, installmentTotal: count,
+        });
+      }
+      setTransactions((prev) => [...prev, ...newTxs]);
+      setShowForm(false);
+      resetForm();
+      return;
+    }
+
+    if (editingId) {
+      setTransactions((prev) => prev.map((t) => (t.id === editingId ? { ...t, ...form, amount: amountNum } : t)));
+    } else {
+      setTransactions((prev) => [...prev, { id: uid(), ...form, amount: amountNum }]);
+    }
+    setShowForm(false);
+    resetForm();
+  };
+
+  const handleDelete = (t) => {
+    setTransactions((prev) => prev.filter((x) => x.id !== t.id));
+    setToast({ message: `Lançamento "${t.description}" excluído.`, item: t });
+  };
+
+  const handleUndo = () => {
+    if (toast?.item) setTransactions((prev) => [...prev, toast.item]);
+    setToast(null);
+  };
+
+  const shiftMonth = (delta) => {
+    setRefDate((d) => new Date(d.getFullYear(), d.getMonth() + delta, 1));
+  };
+
+  const resetAllData = () => {
+    if (window.confirm("Isso vai apagar todos os lançamentos salvos. Deseja continuar?")) {
+      setTransactions([]);
+    }
+  };
+
+  const handleAddCategory = () => {
+    const label = categoryForm.label.trim();
+    if (!label) { setCategoryError("Dê um nome para a categoria."); return; }
+    const allLabels = [...categoriesByType.receita, ...categoriesByType.despesa].map((c) => c.label.toLowerCase());
+    if (allLabels.includes(label.toLowerCase())) { setCategoryError("Já existe uma categoria com esse nome."); return; }
+    setCustomCategories((prev) => [...prev, { id: `custom_${uid()}`, label, type: categoryForm.type, color: categoryForm.color }]);
+    setCategoryForm({ label: "", type: categoryForm.type, color: COLOR_PALETTE[0] });
+    setCategoryError("");
+  };
+
+  const handleDeleteCategory = (cat) => {
+    const isCustom = customCategories.some((c) => c.id === cat.id);
+    if (isCustom) {
+      setCustomCategories((prev) => prev.filter((c) => c.id !== cat.id));
+    } else {
+      setHiddenDefaultCategories((prev) => [...prev, cat.id]);
+    }
+  };
+
+  const handleRestoreDefaultCategories = () => setHiddenDefaultCategories([]);
+
+  const handleAddBank = () => {
+    const label = bankForm.label.trim();
+    if (!label) { setBankError("Dê um nome para o banco ou conta."); return; }
+    if (banksList.some((b) => b.label.toLowerCase() === label.toLowerCase())) { setBankError("Já existe um banco com esse nome."); return; }
+    setCustomBanks((prev) => [...prev, { id: `banco_${uid()}`, label, color: bankForm.color }]);
+    setBankForm({ label: "", color: COLOR_PALETTE[0] });
+    setBankError("");
+  };
+
+  const handleDeleteBank = (bank) => {
+    const isCustom = customBanks.some((b) => b.id === bank.id);
+    if (isCustom) {
+      setCustomBanks((prev) => prev.filter((b) => b.id !== bank.id));
+    } else {
+      setHiddenDefaultBanks((prev) => [...prev, bank.id]);
+    }
+  };
+
+  const handleRestoreDefaultBanks = () => setHiddenDefaultBanks([]);
+
+  const resetFixedForm = () => { setFixedForm(emptyFixedForm); setEditingFixedId(null); setFixedFormError(""); };
+  const openNewFixedForm = () => { resetFixedForm(); setShowFixedForm(true); };
+  const openEditFixedForm = (bill) => {
+    setFixedForm({ description: bill.description, amount: String(getAmountForPeriod(bill, refDate)), type: bill.type, category: bill.category, account: bill.account || "", dueDay: String(bill.dueDay) });
+    setEditingFixedId(bill.id);
+    setShowFixedForm(true);
+  };
+  const handleFixedTypeChange = (type) => setFixedForm((f) => ({ ...f, type, category: "" }));
+
+  const handleSubmitFixed = () => {
+    const amountNum = parseFloat(String(fixedForm.amount).replace(",", "."));
+    const dayNum = parseInt(fixedForm.dueDay, 10);
+    if (!fixedForm.description.trim()) { setFixedFormError("Dê uma descrição para a conta fixa."); return; }
+    if (!amountNum || amountNum <= 0) { setFixedFormError("Informe um valor maior que zero."); return; }
+    if (!fixedForm.category) { setFixedFormError("Selecione uma categoria."); return; }
+    if (!dayNum || dayNum < 1 || dayNum > 31) { setFixedFormError("Informe um dia de vencimento entre 1 e 31."); return; }
+
+    const period = periodKeyOf(refDate);
+
+    if (editingFixedId) {
+      setFixedBills((prev) => prev.map((b) => {
+        if (b.id !== editingFixedId) return b;
+        const currentEffective = getAmountForPeriod(b, refDate);
+        const baseHistory = b.amountHistory && b.amountHistory.length > 0 ? b.amountHistory : [{ period: "0000-01", amount: b.amount || 0 }];
+        const amountHistory = amountNum === currentEffective
+          ? baseHistory
+          : [...baseHistory.filter((h) => h.period !== period), { period, amount: amountNum }];
+        return {
+          ...b,
+          description: fixedForm.description,
+          type: fixedForm.type,
+          category: fixedForm.category,
+          account: fixedForm.account,
+          dueDay: dayNum,
+          amountHistory,
+        };
+      }));
+    } else {
+      setFixedBills((prev) => [...prev, {
+        id: uid(), description: fixedForm.description, type: fixedForm.type, category: fixedForm.category,
+        account: fixedForm.account, dueDay: dayNum, active: true, amountHistory: [{ period, amount: amountNum }],
+      }]);
+    }
+    setShowFixedForm(false);
+    resetFixedForm();
+  };
+
+  const handleDeleteFixed = (bill) => {
+    setFixedBills((prev) => prev.filter((b) => b.id !== bill.id));
+  };
+
+  const handleToggleActiveFixed = (bill) => {
+    setFixedBills((prev) => prev.map((b) => (b.id === bill.id ? { ...b, active: !b.active } : b)));
+  };
+
+  const handleLaunchFixedBill = (bill) => {
+    const daysInMonth = new Date(refDate.getFullYear(), refDate.getMonth() + 1, 0).getDate();
+    const day = Math.min(bill.dueDay, daysInMonth);
+    const dateISO = `${refDate.getFullYear()}-${String(refDate.getMonth() + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    const newTx = {
+      id: uid(), description: bill.description, amount: bill.amount, date: dateISO,
+      type: bill.type, category: bill.category, account: bill.account, status: "pago",
+      recurringId: bill.id, recurringPeriod: periodKeyOf(refDate),
+    };
+    setTransactions((prev) => [...prev, newTx]);
+  };
+
+  const handleUndoLaunchFixedBill = (bill) => {
+    const period = periodKeyOf(refDate);
+    setTransactions((prev) => prev.filter((t) => !(t.recurringId === bill.id && t.recurringPeriod === period)));
+  };
+
+  const handleAddBudget = () => {
+    if (!budgetForm.categoryId) { setBudgetError("Selecione uma categoria."); return; }
+    const limitNum = parseFloat(String(budgetForm.limit).replace(",", "."));
+    if (!limitNum || limitNum <= 0) { setBudgetError("Informe um limite maior que zero."); return; }
+    if (budgets.some((b) => b.categoryId === budgetForm.categoryId)) { setBudgetError("Essa categoria já tem um orçamento definido."); return; }
+    setBudgets((prev) => [...prev, { id: uid(), categoryId: budgetForm.categoryId, limit: limitNum }]);
+    setBudgetForm({ categoryId: "", limit: "" });
+    setBudgetError("");
+  };
+
+  const handleUpdateBudgetLimit = (budgetId, newLimit) => {
+    setBudgets((prev) => prev.map((b) => (b.id === budgetId ? { ...b, limit: newLimit } : b)));
+  };
+
+  const handleDeleteBudget = (budget) => {
+    setBudgets((prev) => prev.filter((b) => b.id !== budget.id));
+  };
+
+  const resetGoalForm = () => { setGoalForm(emptyGoalForm); setEditingGoalId(null); setGoalError(""); };
+  const openNewGoalForm = () => { resetGoalForm(); setShowGoalForm(true); };
+  const openEditGoalForm = (goal) => {
+    setGoalForm({ title: goal.title, targetAmount: String(goal.targetAmount), deadline: goal.deadline || "", color: goal.color });
+    setEditingGoalId(goal.id);
+    setShowGoalForm(true);
+  };
+
+  const handleSubmitGoal = () => {
+    const targetNum = parseFloat(String(goalForm.targetAmount).replace(",", "."));
+    if (!goalForm.title.trim()) { setGoalError("Dê um nome para a meta."); return; }
+    if (!targetNum || targetNum <= 0) { setGoalError("Informe um valor alvo maior que zero."); return; }
+
+    if (editingGoalId) {
+      setGoals((prev) => prev.map((g) => (g.id === editingGoalId ? { ...g, title: goalForm.title.trim(), targetAmount: targetNum, deadline: goalForm.deadline, color: goalForm.color } : g)));
+    } else {
+      setGoals((prev) => [...prev, { id: uid(), title: goalForm.title.trim(), targetAmount: targetNum, currentAmount: 0, deadline: goalForm.deadline, color: goalForm.color, history: [] }]);
+    }
+    setShowGoalForm(false);
+    resetGoalForm();
+  };
+
+  const handleDeleteGoal = (goal) => {
+    setGoals((prev) => prev.filter((g) => g.id !== goal.id));
+  };
+
+  const handleContributeGoal = (goalId, delta) => {
+    setGoals((prev) => prev.map((g) => (g.id === goalId ? {
+      ...g,
+      currentAmount: Math.max(0, g.currentAmount + delta),
+      history: [...(g.history || []), { id: uid(), date: todayISO(), amount: delta }],
+    } : g)));
+  };
+
+  const handleDeleteGoalHistoryEntry = (goalId, entryId) => {
+    setGoals((prev) => prev.map((g) => {
+      if (g.id !== goalId) return g;
+      const entry = (g.history || []).find((h) => h.id === entryId);
+      if (!entry) return g;
+      return {
+        ...g,
+        currentAmount: Math.max(0, g.currentAmount - entry.amount),
+        history: g.history.filter((h) => h.id !== entryId),
+      };
+    }));
+  };
+
+  return (
+    <div
+      className="rz-app min-h-screen flex flex-col md:flex-row"
+      style={{ "--paper": theme.paper, "--ink": theme.ink, "--emerald": theme.emerald, "--brick": theme.brick, "--gold": theme.gold }}
+    >
+
+      {/* ---------------- Sidebar ---------------- */}
+      <aside className="rz-sidebar md:w-60 md:min-h-screen flex flex-col shrink-0">
+        <div className="flex items-center justify-between p-4 md:p-5">
+          <div className="flex items-center gap-2">
+            <BookOpen size={22} color="#EEF1E7" strokeWidth={1.75} />
+            <div>
+              <div className="rz-display text-lg leading-tight" style={{ color: "#EEF1E7" }}>Razão</div>
+              <div className="text-[11px] leading-tight" style={{ color: "#8FA090" }}>controle financeiro</div>
+            </div>
+          </div>
+          <button className="md:hidden rz-focus" onClick={() => setMobileNavOpen((v) => !v)} aria-label="Abrir menu">
+            <Menu size={22} color="#EEF1E7" />
+          </button>
+        </div>
+
+        <nav className={`${mobileNavOpen ? "flex" : "hidden"} md:flex flex-col gap-1 px-3 pb-4 md:pb-0 overflow-y-auto`}>
+          {NAV_ITEMS.map((item) => {
+            const Icon = item.icon;
+            const isActive = activeTab === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => { setActiveTab(item.id); setMobileNavOpen(false); }}
+                className={`rz-nav-item rz-focus ${isActive ? "active" : ""} flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-left`}
+              >
+                <Icon size={17} strokeWidth={1.75} />
+                <span className="flex-1">{item.label}</span>
+                {!item.ready && <span className="rz-mono text-[9px] opacity-60">EM BREVE</span>}
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className={`${mobileNavOpen ? "flex" : "hidden"} md:flex flex-col gap-2 p-4 mt-auto`}>
+          <button onClick={() => supabase.auth.signOut()} className="text-[11px] rz-focus flex items-center gap-1.5" style={{ color: "#C7D3C9" }}>
+            <LogOut size={12} /> Sair da conta
+          </button>
+          <button onClick={resetAllData} className="text-[11px] rz-focus" style={{ color: "#7A8C7D" }}>
+            Limpar todos os dados
+          </button>
+        </div>
+      </aside>
+
+      {/* ---------------- Main ---------------- */}
+      <main className="flex-1 p-5 md:p-10 max-w-6xl w-full mx-auto">
+        {!loaded ? (
+          <div className="flex items-center gap-3 mt-20 justify-center" style={{ color: "var(--ink-soft)" }}>
+            <div className="rz-mono text-sm">Carregando seus dados…</div>
+          </div>
+        ) : activeTab === "visao-geral" ? (
+          <VisaoGeralTab
+            transactions={transactions}
+            periodFiltered={periodFiltered}
+            totals={totals}
+            refDate={refDate}
+            periodMode={periodMode}
+            shiftMonth={shiftMonth}
+            setPeriodMode={setPeriodMode}
+            findCategory={findCategory}
+            setActiveTab={setActiveTab}
+            fixedBills={fixedBills}
+            findBank={findBank}
+            onLaunchFixedBill={handleLaunchFixedBill}
+          />
+        ) : activeTab === "config" ? (
+          <ConfiguracoesTab
+            theme={theme}
+            setTheme={setTheme}
+            categoriesByType={categoriesByType}
+            customCategories={customCategories}
+            categoryForm={categoryForm}
+            setCategoryForm={setCategoryForm}
+            categoryError={categoryError}
+            onAddCategory={handleAddCategory}
+            onDeleteCategory={handleDeleteCategory}
+            hiddenCategoriesCount={hiddenDefaultCategories.length}
+            onRestoreCategories={handleRestoreDefaultCategories}
+            banksList={banksList}
+            customBanks={customBanks}
+            bankForm={bankForm}
+            setBankForm={setBankForm}
+            bankError={bankError}
+            onAddBank={handleAddBank}
+            onDeleteBank={handleDeleteBank}
+            hiddenBanksCount={hiddenDefaultBanks.length}
+            onRestoreBanks={handleRestoreDefaultBanks}
+          />
+        ) : activeTab === "relatorios" ? (
+          <ReportsTab transactions={transactions} findCategory={findCategory} fixedBills={fixedBills} />
+        ) : activeTab === "orcamento" ? (
+          <OrcamentoTab
+            budgets={budgets}
+            periodFiltered={periodFiltered}
+            refDate={refDate}
+            shiftMonth={shiftMonth}
+            categoriesByType={categoriesByType}
+            findCategory={findCategory}
+            budgetForm={budgetForm}
+            setBudgetForm={setBudgetForm}
+            budgetError={budgetError}
+            onAdd={handleAddBudget}
+            onUpdateLimit={handleUpdateBudgetLimit}
+            onDelete={handleDeleteBudget}
+          />
+        ) : activeTab === "metas" ? (
+          <MetasTab
+            goals={goals}
+            goalForm={goalForm}
+            setGoalForm={setGoalForm}
+            showGoalForm={showGoalForm}
+            setShowGoalForm={setShowGoalForm}
+            editingGoalId={editingGoalId}
+            goalError={goalError}
+            onOpenNew={openNewGoalForm}
+            onOpenEdit={openEditGoalForm}
+            onSubmit={handleSubmitGoal}
+            onDelete={handleDeleteGoal}
+            onCancelForm={() => { setShowGoalForm(false); resetGoalForm(); }}
+            onContribute={handleContributeGoal}
+            onDeleteHistoryEntry={handleDeleteGoalHistoryEntry}
+          />
+        ) : activeTab === "fixas" ? (
+          <FixedBillsTab
+            fixedBills={fixedBills}
+            transactions={transactions}
+            refDate={refDate}
+            shiftMonth={shiftMonth}
+            categoriesByType={categoriesByType}
+            banksList={banksList}
+            findCategory={findCategory}
+            findBank={findBank}
+            onLaunch={handleLaunchFixedBill}
+            onUndoLaunch={handleUndoLaunchFixedBill}
+            onToggleActive={handleToggleActiveFixed}
+            fixedForm={fixedForm}
+            setFixedForm={setFixedForm}
+            showFixedForm={showFixedForm}
+            setShowFixedForm={setShowFixedForm}
+            editingFixedId={editingFixedId}
+            fixedFormError={fixedFormError}
+            onOpenNew={openNewFixedForm}
+            onOpenEdit={openEditFixedForm}
+            onSubmit={handleSubmitFixed}
+            onDelete={handleDeleteFixed}
+            onCancelForm={() => { setShowFixedForm(false); resetFixedForm(); }}
+            onTypeChange={handleFixedTypeChange}
+          />
+        ) : activeTab !== "lancamentos" ? (
+          <PlaceholderTab item={NAV_ITEMS.find((n) => n.id === activeTab)} />
+        ) : (
+          <>
+            <header className="mb-6">
+              <h1 className="rz-display text-2xl md:text-3xl">Lançamentos</h1>
+              <p className="text-sm mt-1" style={{ color: "var(--ink-soft)" }}>
+                Registre cada entrada e saída para manter seu razão em dia.
+              </p>
+            </header>
+
+            {loadError && (
+              <div className="rz-card p-3 mb-4 text-sm" style={{ borderColor: "var(--brick)", color: "var(--brick)" }}>
+                Não foi possível salvar suas alterações agora. Elas podem se perder ao fechar a aba — tente novamente em instantes.
+              </div>
+            )}
+
+            <PeriodNavigator periodMode={periodMode} refDate={refDate} shiftMonth={shiftMonth} setPeriodMode={setPeriodMode} />
+
+            {/* Summary cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
+              <SummaryCard label="Receitas" value={totals.receitas} icon={TrendingUp} tone="emerald" />
+              <SummaryCard label="Despesas" value={totals.despesas} icon={TrendingDown} tone="brick" />
+              <SummaryCard label="Saldo do período" value={totals.saldo} icon={Scale} tone={totals.saldo >= 0 ? "emerald" : "brick"} />
+            </div>
+
+            {/* Filters + Add button */}
+            <div className="flex flex-col md:flex-row md:items-center gap-2 mb-4">
+              <div className="rz-card flex items-center gap-2 px-3 py-2 flex-1 min-w-[180px]">
+                <Search size={15} style={{ color: "var(--ink-soft)" }} />
+                <input
+                  className="flex-1 outline-none text-sm"
+                  style={{ background: "transparent" }}
+                  placeholder="Buscar por descrição…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+              </div>
+              <select className="rz-input text-sm md:w-auto" value={typeFilter} onChange={(e) => { setTypeFilter(e.target.value); setCategoryFilter("todas"); }}>
+                <option value="todos">Todos os tipos</option>
+                <option value="receita">Receitas</option>
+                <option value="despesa">Despesas</option>
+              </select>
+              <select className="rz-input text-sm md:w-auto" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
+                <option value="todas">Todas as categorias</option>
+                {(typeFilter === "todos" ? [...categoriesByType.receita, ...categoriesByType.despesa] : categoriesByType[typeFilter]).map((c) => (
+                  <option key={c.id} value={c.id}>{c.label}</option>
+                ))}
+              </select>
+              <button onClick={openNewForm} className="rz-btn-primary rz-focus flex items-center justify-center gap-2 text-sm whitespace-nowrap">
+                <Plus size={16} /> Novo lançamento
+              </button>
+            </div>
+
+            {/* Transaction list */}
+            {visibleTransactions.length === 0 ? (
+              <div className="rz-card p-10 text-center">
+                <Receipt size={28} className="mx-auto mb-3" style={{ color: "var(--line)" }} />
+                <div className="rz-display text-lg mb-1">Nenhum lançamento por aqui</div>
+                <p className="text-sm mb-4" style={{ color: "var(--ink-soft)" }}>
+                  {transactions.length === 0 ? "Comece registrando sua primeira receita ou despesa." : "Nada bate com os filtros atuais — tente ajustá-los."}
+                </p>
+                {transactions.length === 0 && (
+                  <button onClick={openNewForm} className="rz-btn-primary rz-focus text-sm inline-flex items-center gap-2">
+                    <Plus size={16} /> Adicionar lançamento
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="rz-card overflow-hidden">
+                {visibleTransactions.map((t, i) => {
+                  const cat = findCategory(t.type, t.category);
+                  const bank = t.account ? findBank(t.account) : null;
+                  return (
+                    <div
+                      key={t.id}
+                      className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 px-4 py-3"
+                      style={{ borderTop: i === 0 ? "none" : "1px solid var(--line)" }}
+                    >
+                      <div className="flex items-center gap-2 flex-1 min-w-0">
+                        <span className="rz-dot" style={{ background: cat.color }} />
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium truncate">{t.description}</div>
+                          <div className="text-xs" style={{ color: "var(--ink-soft)" }}>
+                            {cat.label}{bank ? ` · ${bank.label}` : ""}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="rz-mono text-xs w-20 shrink-0" style={{ color: "var(--ink-soft)" }}>{formatDateBR(t.date)}</div>
+                      <div className="w-24 shrink-0 flex justify-start">
+                        <span className={`rz-stamp ${t.status === "pago" ? "rz-stamp-pago" : "rz-stamp-pendente"}`}>
+                          {t.status === "pago" ? "Pago" : "Pendente"}
+                        </span>
+                      </div>
+                      <div className="rz-mono text-sm font-semibold w-28 text-right shrink-0" style={{ color: t.type === "receita" ? "var(--emerald)" : "var(--brick)" }}>
+                        {t.type === "receita" ? "+ " : "− "}{formatCurrency(t.amount)}
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0 justify-end">
+                        <button onClick={() => openEditForm(t)} className="rz-focus p-1.5 rounded-md hover:bg-[var(--paper-alt)]" aria-label="Editar" style={{ color: "var(--ink-soft)" }}>
+                          <Pencil size={15} />
+                        </button>
+                        <button onClick={() => handleDelete(t)} className="rz-focus p-1.5 rounded-md hover:bg-[var(--paper-alt)]" aria-label="Excluir" style={{ color: "var(--ink-soft)" }}>
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        )}
+      </main>
+
+      {/* ---------------- Form modal ---------------- */}
+      {showForm && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-6" style={{ background: "rgba(30,43,35,0.45)" }}>
+          <div className="rz-card w-full sm:max-w-md p-5 sm:p-6" style={{ borderRadius: "14px 14px 0 0" }}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="rz-display text-xl">{editingId ? "Editar lançamento" : "Novo lançamento"}</h2>
+              <button onClick={() => { setShowForm(false); resetForm(); }} className="rz-focus" style={{ color: "var(--ink-soft)" }} aria-label="Fechar">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="rz-toggle mb-4">
+              <button onClick={() => handleTypeChange("receita")} className={form.type === "receita" ? "receita-on" : "off"}>Receita</button>
+              <button onClick={() => handleTypeChange("despesa")} className={form.type === "despesa" ? "despesa-on" : "off"}>Despesa</button>
+            </div>
+
+            <div className="flex flex-col gap-3">
+              <div>
+                <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Descrição</label>
+                <input className="rz-input rz-focus" placeholder="Ex: Supermercado, Salário…" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+              </div>
+
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>{form.installments ? "Valor total da compra (R$)" : "Valor (R$)"}</label>
+                  <input className="rz-input rz-focus rz-mono" inputMode="decimal" placeholder="0,00" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} />
+                </div>
+                <div className="flex-1">
+                  <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Data</label>
+                  <input type="date" className="rz-input rz-focus rz-mono" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
+                </div>
+              </div>
+
+              {!editingId && form.type === "despesa" && (
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => setForm({ ...form, installments: !form.installments })}
+                    className="rz-focus flex items-center gap-2 text-sm"
+                  >
+                    <span style={{
+                      width: 16, height: 16, borderRadius: 4, border: "1.5px solid var(--line)",
+                      background: form.installments ? "var(--ink)" : "#fff",
+                      display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                    }}>
+                      {form.installments && <Check size={12} color="var(--paper)" />}
+                    </span>
+                    Parcelar essa compra
+                  </button>
+
+                  {form.installments && (
+                    <div className="flex items-center gap-3 mt-3">
+                      <div className="flex-1">
+                        <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Número de parcelas</label>
+                        <input type="number" min="2" max="60" className="rz-input rz-focus rz-mono" value={form.installmentCount} onChange={(e) => setForm({ ...form, installmentCount: e.target.value })} />
+                      </div>
+                      {(() => {
+                        const total = parseFloat(String(form.amount).replace(",", "."));
+                        const count = parseInt(form.installmentCount, 10);
+                        if (!total || !count || count < 2) return null;
+                        const per = Math.round((total / count) * 100) / 100;
+                        return (
+                          <div className="text-xs rz-mono flex-1" style={{ color: "var(--ink-soft)" }}>
+                            {count}x de {formatCurrency(per)}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div>
+                <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Categoria</label>
+                <select className="rz-input rz-focus" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
+                  <option value="" disabled>Selecione</option>
+                  {categoriesByType[form.type].map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+                </select>
+              </div>
+
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Banco / Conta (opcional)</label>
+                  <select className="rz-input rz-focus" value={form.account} onChange={(e) => setForm({ ...form, account: e.target.value })}>
+                    <option value="">Nenhum selecionado</option>
+                    {banksList.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
+                  </select>
+                </div>
+                <div className="flex-1">
+                  <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Status</label>
+                  <select className="rz-input rz-focus" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
+                    <option value="pago">Pago</option>
+                    <option value="pendente">Pendente</option>
+                  </select>
+                </div>
+              </div>
+
+              {formError && <div className="text-xs" style={{ color: "var(--brick)" }}>{formError}</div>}
+
+              <div className="flex gap-2 mt-2">
+                <button onClick={() => { setShowForm(false); resetForm(); }} className="rz-btn-ghost rz-focus flex-1 text-sm">Cancelar</button>
+                <button onClick={handleSubmit} className="rz-btn-primary rz-focus flex-1 text-sm flex items-center justify-center gap-2">
+                  <Check size={16} /> {editingId ? "Salvar alterações" : "Adicionar"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---------------- Toast ---------------- */}
+      {toast && (
+        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50">
+          <div className="flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg" style={{ background: "var(--ink)", color: "#EEF1E7" }}>
+            <span className="text-sm">{toast.message}</span>
+            <button onClick={handleUndo} className="rz-focus flex items-center gap-1 text-sm font-semibold" style={{ color: "#8FE0C4" }}>
+              <Undo2 size={14} /> Desfazer
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SummaryCard({ label, value, icon: Icon, tone }) {
+  const toneColor = tone === "emerald" ? "var(--emerald)" : "var(--brick)";
+  const toneSoft = tone === "emerald" ? "var(--emerald-soft)" : "var(--brick-soft)";
+  return (
+    <div className="rz-card p-4 flex items-center justify-between">
+      <div>
+        <div className="text-xs mb-1" style={{ color: "var(--ink-soft)" }}>{label}</div>
+        <div className="rz-mono text-xl font-semibold" style={{ color: toneColor }}>{formatCurrency(value)}</div>
+      </div>
+      <div className="w-9 h-9 rounded-full flex items-center justify-center shrink-0" style={{ background: toneSoft }}>
+        <Icon size={17} style={{ color: toneColor }} />
+      </div>
+    </div>
+  );
+}
+
+function PeriodNavigator({ periodMode, refDate, shiftMonth, setPeriodMode, hideToggle }) {
+  return (
+    <div className="flex flex-wrap items-center gap-3 mb-5">
+      <div className="rz-card flex items-center gap-1 px-1 py-1">
+        <button onClick={() => shiftMonth(-1)} disabled={periodMode === "todos"} className="rz-focus p-1.5 rounded-md disabled:opacity-30" style={{ color: "var(--ink-soft)" }} aria-label="Mês anterior">
+          <ChevronLeft size={16} />
+        </button>
+        <div className="rz-mono text-sm px-2 min-w-[150px] text-center">
+          {periodMode === "todos" ? "Todos os períodos" : `${MONTHS[refDate.getMonth()]} / ${refDate.getFullYear()}`}
+        </div>
+        <button onClick={() => shiftMonth(1)} disabled={periodMode === "todos"} className="rz-focus p-1.5 rounded-md disabled:opacity-30" style={{ color: "var(--ink-soft)" }} aria-label="Próximo mês">
+          <ChevronRight size={16} />
+        </button>
+      </div>
+      {!hideToggle && (
+        <button
+          onClick={() => setPeriodMode((m) => (m === "mes" ? "todos" : "mes"))}
+          className="rz-btn-ghost rz-focus text-xs !py-2"
+        >
+          {periodMode === "mes" ? "Ver todos os períodos" : "Ver por mês"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function formatCompact(v) {
+  const abs = Math.abs(v);
+  if (abs >= 1000) return `${v < 0 ? "-" : ""}${(abs / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}k`;
+  return v.toFixed(0);
+}
+
+function ConfiguracoesTab({
+  theme, setTheme,
+  categoriesByType, customCategories, categoryForm, setCategoryForm, categoryError,
+  onAddCategory, onDeleteCategory, hiddenCategoriesCount, onRestoreCategories,
+  banksList, customBanks, bankForm, setBankForm, bankError,
+  onAddBank, onDeleteBank, hiddenBanksCount, onRestoreBanks,
+}) {
+  const [subTab, setSubTab] = useState("tema");
+  const SUB_TABS = [
+    { id: "tema", label: "Tema" },
+    { id: "categorias", label: "Categorias" },
+    { id: "contas", label: "Contas e Cartões" },
+  ];
+
+  return (
+    <div>
+      <header className="mb-6">
+        <h1 className="rz-display text-2xl md:text-3xl">Configurações</h1>
+        <p className="text-sm mt-1" style={{ color: "var(--ink-soft)" }}>Personalize cores, categorias e contas do sistema.</p>
+      </header>
+
+      <div className="flex gap-2 mb-6 flex-wrap">
+        {SUB_TABS.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setSubTab(t.id)}
+            className="rz-focus text-sm font-medium px-4 py-2 rounded-lg"
+            style={subTab === t.id
+              ? { background: "var(--ink)", color: "var(--paper)" }
+              : { background: "#fff", color: "var(--ink-soft)", border: "1px solid var(--line)" }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {subTab === "tema" && <TemaSection theme={theme} setTheme={setTheme} />}
+
+      {subTab === "categorias" && (
+        <CategoriasTab
+          categoriesByType={categoriesByType}
+          customCategories={customCategories}
+          categoryForm={categoryForm}
+          setCategoryForm={setCategoryForm}
+          categoryError={categoryError}
+          onAdd={onAddCategory}
+          onDelete={onDeleteCategory}
+          hiddenCount={hiddenCategoriesCount}
+          onRestore={onRestoreCategories}
+        />
+      )}
+
+      {subTab === "contas" && (
+        <BancosTab
+          banksList={banksList}
+          customBanks={customBanks}
+          bankForm={bankForm}
+          setBankForm={setBankForm}
+          bankError={bankError}
+          onAdd={onAddBank}
+          onDelete={onDeleteBank}
+          hiddenCount={hiddenBanksCount}
+          onRestore={onRestoreBanks}
+        />
+      )}
+    </div>
+  );
+}
+
+function TemaSection({ theme, setTheme }) {
+  const updateColor = (key, value) => setTheme((t) => ({ ...t, [key]: value }));
+  const applyPreset = (colors) => setTheme(colors);
+  const resetDefault = () => setTheme(DEFAULT_THEME);
+
+  const fields = [
+    { key: "paper", label: "Fundo", hint: "Cor de fundo geral do sistema" },
+    { key: "ink", label: "Texto / Tinta", hint: "Cor do texto e da barra lateral" },
+    { key: "emerald", label: "Receitas", hint: "Usada em receitas, saldo positivo e destaques" },
+    { key: "brick", label: "Despesas", hint: "Usada em despesas e alertas" },
+    { key: "gold", label: "Pendências", hint: "Usada em pendências, vencimentos e metas" },
+  ];
+
+  return (
+    <div className="max-w-xl mx-auto">
+      <div className="rz-card p-5 mb-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-semibold">Cores do sistema</h2>
+          <button onClick={resetDefault} className="rz-btn-ghost rz-focus text-xs !py-1.5 !px-3 flex items-center gap-1.5">
+            <RotateCcw size={13} /> Restaurar padrão
+          </button>
+        </div>
+        <div className="flex flex-col gap-1">
+          {fields.map((f, i) => (
+            <div key={f.key} className="flex items-center justify-between gap-3 py-3" style={{ borderTop: i === 0 ? "none" : "1px solid var(--line)" }}>
+              <div className="min-w-0">
+                <div className="text-sm font-medium">{f.label}</div>
+                <div className="text-xs truncate" style={{ color: "var(--ink-soft)" }}>{f.hint}</div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="rz-mono text-xs" style={{ color: "var(--ink-soft)" }}>{theme[f.key]}</span>
+                <input
+                  type="color"
+                  value={theme[f.key]}
+                  onChange={(e) => updateColor(f.key, e.target.value)}
+                  className="rz-focus"
+                  style={{ width: 40, height: 32, border: "1px solid var(--line)", borderRadius: 6, padding: 2, background: "#fff", cursor: "pointer" }}
+                  aria-label={`Cor: ${f.label}`}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="rz-card p-5">
+        <h2 className="text-sm font-semibold mb-4">Temas prontos</h2>
+        <div className="flex flex-wrap gap-3">
+          {THEME_PRESETS.map((preset) => (
+            <button
+              key={preset.name}
+              onClick={() => applyPreset(preset.colors)}
+              className="rz-focus flex flex-col items-center gap-1.5 p-2 rounded-lg"
+              style={{ border: "1px solid var(--line)" }}
+            >
+              <div className="flex" style={{ borderRadius: 6, overflow: "hidden" }}>
+                {[preset.colors.paper, preset.colors.ink, preset.colors.emerald, preset.colors.brick, preset.colors.gold].map((c, i) => (
+                  <span key={i} style={{ width: 16, height: 26, background: c, display: "block" }} />
+                ))}
+              </div>
+              <span className="text-xs">{preset.name}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ReportsTab({ transactions, findCategory, fixedBills }) {
+  const [monthsCount, setMonthsCount] = useState(6);
+  const [horizonDays, setHorizonDays] = useState(90);
+  const today = new Date();
+  const [customStart, setCustomStart] = useState(() => new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10));
+  const [customEnd, setCustomEnd] = useState(() => todayISO());
+
+  const projection = useMemo(() => buildCashFlowProjection(transactions, fixedBills, horizonDays), [transactions, fixedBills, horizonDays]);
+
+  const monthlyData = useMemo(() => {
+    const now = new Date();
+    const months = [];
+    for (let i = monthsCount - 1; i >= 0; i--) months.push(new Date(now.getFullYear(), now.getMonth() - i, 1));
+    return months.map((d) => {
+      const y = d.getFullYear(), m = d.getMonth();
+      const inMonth = transactions.filter((t) => { const td = new Date(t.date + "T00:00:00"); return td.getFullYear() === y && td.getMonth() === m; });
+      const receitas = inMonth.filter((t) => t.type === "receita").reduce((s, t) => s + Number(t.amount), 0);
+      const despesas = inMonth.filter((t) => t.type === "despesa").reduce((s, t) => s + Number(t.amount), 0);
+      return { mes: `${MONTHS[m].slice(0, 3)}/${String(y).slice(2)}`, receitas, despesas, saldo: receitas - despesas };
+    });
+  }, [transactions, monthsCount]);
+
+  const customRangeData = useMemo(() => {
+    if (!customStart || !customEnd) return null;
+    const inRange = transactions.filter((t) => t.date >= customStart && t.date <= customEnd);
+    const receitas = inRange.filter((t) => t.type === "receita").reduce((s, t) => s + Number(t.amount), 0);
+    const despesas = inRange.filter((t) => t.type === "despesa").reduce((s, t) => s + Number(t.amount), 0);
+    const byCategory = {};
+    inRange.filter((t) => t.type === "despesa").forEach((t) => { byCategory[t.category] = (byCategory[t.category] || 0) + Number(t.amount); });
+    const topCategories = Object.entries(byCategory)
+      .map(([catId, value]) => { const cat = findCategory("despesa", catId); return { name: cat.label, color: cat.color, value }; })
+      .sort((a, b) => b.value - a.value).slice(0, 5);
+    return { receitas, despesas, saldo: receitas - despesas, count: inRange.length, topCategories };
+  }, [transactions, customStart, customEnd, findCategory]);
+
+  const tooltipStyle = { background: "#fff", border: "1px solid var(--line)", borderRadius: 8, fontSize: 12, fontFamily: "IBM Plex Mono, monospace" };
+
+  return (
+    <div>
+      <header className="mb-6">
+        <h1 className="rz-display text-2xl md:text-3xl">Relatórios</h1>
+        <p className="text-sm mt-1" style={{ color: "var(--ink-soft)" }}>Compare seus meses e veja o resumo de qualquer período.</p>
+      </header>
+
+      {/* Monthly comparison */}
+      <div className="rz-card p-4 sm:p-5 mb-6">
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+          <h2 className="text-sm font-semibold">Comparativo mês a mês</h2>
+          <div className="rz-toggle" style={{ width: 140 }}>
+            <button onClick={() => setMonthsCount(6)} className={monthsCount === 6 ? "despesa-on" : "off"} style={monthsCount === 6 ? { background: "var(--ink)" } : {}}>6 meses</button>
+            <button onClick={() => setMonthsCount(12)} className={monthsCount === 12 ? "despesa-on" : "off"} style={monthsCount === 12 ? { background: "var(--ink)" } : {}}>12 meses</button>
+          </div>
+        </div>
+
+        <ResponsiveContainer width="100%" height={240}>
+          <BarChart data={monthlyData} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
+            <CartesianGrid stroke="var(--line)" vertical={false} />
+            <XAxis dataKey="mes" tick={{ fontSize: 11, fontFamily: "IBM Plex Mono, monospace", fill: "#56685C" }} axisLine={{ stroke: "var(--line)" }} tickLine={false} />
+            <YAxis tickFormatter={formatCompact} tick={{ fontSize: 11, fontFamily: "IBM Plex Mono, monospace", fill: "#56685C" }} axisLine={false} tickLine={false} width={48} />
+            <Tooltip formatter={(v) => formatCurrency(v)} contentStyle={tooltipStyle} labelStyle={{ color: "var(--ink)", fontWeight: 600 }} />
+            <Legend wrapperStyle={{ fontSize: 12, fontFamily: "Inter, sans-serif" }} />
+            <Bar dataKey="receitas" name="Receitas" fill="#1B5E4F" radius={[3, 3, 0, 0]} />
+            <Bar dataKey="despesas" name="Despesas" fill="#A83B2E" radius={[3, 3, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid var(--line)" }}>
+                <th className="text-left py-2 font-medium" style={{ color: "var(--ink-soft)" }}>Mês</th>
+                <th className="text-right py-2 font-medium" style={{ color: "var(--ink-soft)" }}>Receitas</th>
+                <th className="text-right py-2 font-medium" style={{ color: "var(--ink-soft)" }}>Despesas</th>
+                <th className="text-right py-2 font-medium" style={{ color: "var(--ink-soft)" }}>Saldo</th>
+                <th className="text-right py-2 font-medium" style={{ color: "var(--ink-soft)" }}>Variação</th>
+              </tr>
+            </thead>
+            <tbody>
+              {monthlyData.map((row, i) => {
+                const prev = i > 0 ? monthlyData[i - 1] : null;
+                let variation = null;
+                if (prev && prev.saldo !== 0) variation = ((row.saldo - prev.saldo) / Math.abs(prev.saldo)) * 100;
+                return (
+                  <tr key={row.mes} style={{ borderBottom: i === monthlyData.length - 1 ? "none" : "1px solid var(--line)" }}>
+                    <td className="py-2 rz-mono">{row.mes}</td>
+                    <td className="py-2 rz-mono text-right" style={{ color: "var(--emerald)" }}>{formatCurrency(row.receitas)}</td>
+                    <td className="py-2 rz-mono text-right" style={{ color: "var(--brick)" }}>{formatCurrency(row.despesas)}</td>
+                    <td className="py-2 rz-mono text-right font-semibold" style={{ color: row.saldo >= 0 ? "var(--emerald)" : "var(--brick)" }}>{formatCurrency(row.saldo)}</td>
+                    <td className="py-2 text-right">
+                      {variation === null ? (
+                        <span className="rz-mono text-xs" style={{ color: "var(--ink-soft)" }}>—</span>
+                      ) : (
+                        <span className="rz-mono text-xs inline-flex items-center gap-1 justify-end" style={{ color: variation >= 0 ? "var(--emerald)" : "var(--brick)" }}>
+                          {variation >= 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+                          {Math.abs(variation).toFixed(0)}%
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Projected cash flow */}
+      <div className="rz-card p-4 sm:p-5 mb-6">
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+          <div>
+            <h2 className="text-sm font-semibold">Fluxo de caixa projetado</h2>
+            <p className="text-xs mt-0.5" style={{ color: "var(--ink-soft)" }}>Saldo atual + lançamentos pendentes + contas fixas ainda não lançadas.</p>
+          </div>
+          <div className="rz-toggle" style={{ width: 190 }}>
+            {[30, 60, 90].map((n) => (
+              <button key={n} onClick={() => setHorizonDays(n)} className={horizonDays === n ? "despesa-on" : "off"} style={horizonDays === n ? { background: "var(--ink)" } : {}}>
+                {n}d
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+          <SummaryCard label="Saldo atual" value={projection.baseline} icon={Scale} tone={projection.baseline >= 0 ? "emerald" : "brick"} />
+          <SummaryCard label={`Projetado em ${horizonDays}d`} value={projection.final} icon={Scale} tone={projection.final >= 0 ? "emerald" : "brick"} />
+          <SummaryCard label="Entradas previstas" value={projection.totalIn} icon={TrendingUp} tone="emerald" />
+          <SummaryCard label="Saídas previstas" value={projection.totalOut} icon={TrendingDown} tone="brick" />
+        </div>
+
+        <ResponsiveContainer width="100%" height={200}>
+          <LineChart data={projection.chartData} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
+            <CartesianGrid stroke="var(--line)" vertical={false} />
+            <XAxis dataKey="dia" tick={{ fontSize: 11, fontFamily: "IBM Plex Mono, monospace", fill: "#56685C" }} axisLine={{ stroke: "var(--line)" }} tickLine={false} />
+            <YAxis tickFormatter={formatCompact} tick={{ fontSize: 11, fontFamily: "IBM Plex Mono, monospace", fill: "#56685C" }} axisLine={false} tickLine={false} width={48} />
+            <Tooltip formatter={(v) => formatCurrency(v)} contentStyle={{ background: "#fff", border: "1px solid var(--line)", borderRadius: 8, fontSize: 12, fontFamily: "IBM Plex Mono, monospace" }} labelStyle={{ color: "var(--ink)", fontWeight: 600 }} />
+            <Line type="monotone" dataKey="saldo" name="Saldo projetado" stroke="var(--gold)" strokeWidth={2.5} strokeDasharray="6 4" dot={{ r: 2, fill: "var(--gold)" }} activeDot={{ r: 5 }} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* Custom period report */}
+      <div className="rz-card p-4 sm:p-5">
+        <h2 className="text-sm font-semibold mb-3">Relatório por período personalizado</h2>
+        <div className="flex flex-wrap items-end gap-3 mb-5">
+          <div>
+            <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>De</label>
+            <input type="date" className="rz-input rz-focus rz-mono" value={customStart} onChange={(e) => setCustomStart(e.target.value)} />
+          </div>
+          <div>
+            <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Até</label>
+            <input type="date" className="rz-input rz-focus rz-mono" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} />
+          </div>
+        </div>
+
+        {customRangeData && customRangeData.count === 0 ? (
+          <p className="text-sm py-6 text-center" style={{ color: "var(--ink-soft)" }}>Nenhum lançamento neste período.</p>
+        ) : customRangeData && (
+          <>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+              <SummaryCard label="Receitas" value={customRangeData.receitas} icon={TrendingUp} tone="emerald" />
+              <SummaryCard label="Despesas" value={customRangeData.despesas} icon={TrendingDown} tone="brick" />
+              <SummaryCard label="Saldo" value={customRangeData.saldo} icon={Scale} tone={customRangeData.saldo >= 0 ? "emerald" : "brick"} />
+              <div className="rz-card p-4 flex items-center justify-between">
+                <div>
+                  <div className="text-xs mb-1" style={{ color: "var(--ink-soft)" }}>Lançamentos</div>
+                  <div className="rz-mono text-xl font-semibold">{customRangeData.count}</div>
+                </div>
+                <div className="w-9 h-9 rounded-full flex items-center justify-center shrink-0" style={{ background: "var(--paper-alt)" }}>
+                  <Receipt size={17} style={{ color: "var(--ink-soft)" }} />
+                </div>
+              </div>
+            </div>
+
+            {customRangeData.topCategories.length > 0 && (
+              <div>
+                <h3 className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: "var(--ink-soft)" }}>Maiores categorias de despesa</h3>
+                <div className="flex flex-col">
+                  {customRangeData.topCategories.map((c, i) => (
+                    <div key={c.name} className="flex items-center gap-3 py-2" style={{ borderTop: i === 0 ? "none" : "1px solid var(--line)" }}>
+                      <span className="rz-dot" style={{ background: c.color }} />
+                      <span className="text-sm flex-1">{c.name}</span>
+                      <span className="rz-mono text-sm font-semibold" style={{ color: "var(--brick)" }}>{formatCurrency(c.value)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function OrcamentoTab({ budgets, periodFiltered, refDate, shiftMonth, categoriesByType, findCategory, budgetForm, setBudgetForm, budgetError, onAdd, onUpdateLimit, onDelete }) {
+  const spentByCategory = useMemo(() => {
+    const map = {};
+    periodFiltered.filter((t) => t.type === "despesa").forEach((t) => { map[t.category] = (map[t.category] || 0) + Number(t.amount); });
+    return map;
+  }, [periodFiltered]);
+
+  const availableCategories = categoriesByType.despesa.filter((c) => !budgets.some((b) => b.categoryId === c.id));
+
+  const totalLimit = budgets.reduce((s, b) => s + b.limit, 0);
+  const totalSpent = budgets.reduce((s, b) => s + (spentByCategory[b.categoryId] || 0), 0);
+
+  return (
+    <div>
+      <header className="mb-6">
+        <h1 className="rz-display text-2xl md:text-3xl">Orçamento</h1>
+        <p className="text-sm mt-1" style={{ color: "var(--ink-soft)" }}>Defina um limite mensal por categoria e acompanhe o quanto já gastou.</p>
+      </header>
+
+      <PeriodNavigator periodMode="mes" refDate={refDate} shiftMonth={shiftMonth} setPeriodMode={() => {}} hideToggle />
+
+      {budgets.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
+          <SummaryCard label="Total orçado" value={totalLimit} icon={Target} tone="emerald" />
+          <SummaryCard label="Total gasto (categorias orçadas)" value={totalSpent} icon={TrendingDown} tone={totalSpent > totalLimit ? "brick" : "emerald"} />
+        </div>
+      )}
+
+      {availableCategories.length > 0 ? (
+        <div className="rz-card p-5 mb-6">
+          <h2 className="text-sm font-semibold mb-3">Novo orçamento</h2>
+          <div className="flex flex-col sm:flex-row gap-3">
+            <select className="rz-input rz-focus" style={{ flex: "2 1 220px" }} value={budgetForm.categoryId} onChange={(e) => setBudgetForm({ ...budgetForm, categoryId: e.target.value })}>
+              <option value="">Selecione a categoria</option>
+              {availableCategories.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+            </select>
+            <input className="rz-input rz-focus rz-mono sm:w-40" inputMode="decimal" placeholder="Limite (R$)" value={budgetForm.limit} onChange={(e) => setBudgetForm({ ...budgetForm, limit: e.target.value })} onKeyDown={(e) => e.key === "Enter" && onAdd()} />
+            <button onClick={onAdd} className="rz-btn-primary rz-focus flex items-center justify-center gap-2 text-sm whitespace-nowrap">
+              <Plus size={16} /> Adicionar
+            </button>
+          </div>
+          {budgetError && <div className="text-xs mt-2" style={{ color: "var(--brick)" }}>{budgetError}</div>}
+        </div>
+      ) : budgets.length > 0 ? (
+        <p className="text-xs mb-6" style={{ color: "var(--ink-soft)" }}>Todas as categorias de despesa já têm um orçamento definido.</p>
+      ) : null}
+
+      {budgets.length === 0 ? (
+        <div className="rz-card p-10 text-center">
+          <Target size={26} className="mx-auto mb-3" style={{ color: "var(--line)" }} />
+          <div className="rz-display text-lg mb-1">Nenhum orçamento definido</div>
+          <p className="text-sm" style={{ color: "var(--ink-soft)" }}>Escolha uma categoria acima e defina um limite mensal de gastos.</p>
+        </div>
+      ) : (
+        <div className="grid sm:grid-cols-2 gap-3">
+          {budgets.map((b) => (
+            <BudgetRow key={b.id} budget={b} spent={spentByCategory[b.categoryId] || 0} category={findCategory("despesa", b.categoryId)} onUpdateLimit={onUpdateLimit} onDelete={onDelete} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BudgetRow({ budget, spent, category, onUpdateLimit, onDelete }) {
+  const [editing, setEditing] = useState(false);
+  const [tempLimit, setTempLimit] = useState(String(budget.limit));
+  const pct = budget.limit > 0 ? (spent / budget.limit) * 100 : 0;
+  const tone = pct < 70 ? { color: "var(--emerald)" } : pct <= 100 ? { color: "var(--gold)" } : { color: "var(--brick)" };
+
+  const saveEdit = () => {
+    const num = parseFloat(String(tempLimit).replace(",", "."));
+    if (num && num > 0) { onUpdateLimit(budget.id, num); setEditing(false); }
+  };
+
+  return (
+    <div className="rz-card p-4">
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="rz-dot" style={{ background: category.color }} />
+          <span className="text-sm font-medium truncate">{category.label}</span>
+        </div>
+        {!editing && (
+          <div className="flex items-center gap-1 shrink-0">
+            <button onClick={() => { setTempLimit(String(budget.limit)); setEditing(true); }} className="rz-focus p-1 rounded-md" aria-label="Editar limite" style={{ color: "var(--ink-soft)" }}>
+              <Pencil size={13} />
+            </button>
+            <button onClick={() => onDelete(budget)} className="rz-focus p-1 rounded-md" aria-label="Excluir orçamento" style={{ color: "var(--ink-soft)" }}>
+              <Trash2 size={13} />
+            </button>
+          </div>
+        )}
+      </div>
+
+      {editing ? (
+        <div className="flex items-center gap-2 mb-2">
+          <input className="rz-input rz-focus rz-mono text-sm flex-1" value={tempLimit} onChange={(e) => setTempLimit(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveEdit()} autoFocus />
+          <button onClick={saveEdit} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--emerald)" }} aria-label="Salvar"><Check size={16} /></button>
+          <button onClick={() => setEditing(false)} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--ink-soft)" }} aria-label="Cancelar"><X size={16} /></button>
+        </div>
+      ) : (
+        <div className="flex items-baseline justify-between mb-2">
+          <span className="rz-mono text-sm font-semibold" style={{ color: tone.color }}>{formatCurrency(spent)}</span>
+          <span className="rz-mono text-xs" style={{ color: "var(--ink-soft)" }}>de {formatCurrency(budget.limit)}</span>
+        </div>
+      )}
+
+      <div className="rz-progress-track">
+        <div className="rz-progress-fill" style={{ width: `${Math.min(pct, 100)}%`, background: tone.color }} />
+      </div>
+      <div className="text-right mt-1">
+        <span className="rz-mono text-[11px]" style={{ color: tone.color }}>{pct.toFixed(0)}%{pct > 100 ? " · acima do limite" : ""}</span>
+      </div>
+    </div>
+  );
+}
+
+function MetasTab({ goals, goalForm, setGoalForm, showGoalForm, editingGoalId, goalError, onOpenNew, onOpenEdit, onSubmit, onDelete, onCancelForm, onContribute, onDeleteHistoryEntry }) {
+  return (
+    <div>
+      <header className="mb-6 flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="rz-display text-2xl md:text-3xl">Metas</h1>
+          <p className="text-sm mt-1" style={{ color: "var(--ink-soft)" }}>Junte dinheiro para os seus objetivos, um valor de cada vez.</p>
+        </div>
+        <button onClick={onOpenNew} className="rz-btn-primary rz-focus flex items-center gap-2 text-sm whitespace-nowrap">
+          <Plus size={16} /> Nova meta
+        </button>
+      </header>
+
+      {goals.length === 0 ? (
+        <div className="rz-card p-10 text-center">
+          <PiggyBank size={26} className="mx-auto mb-3" style={{ color: "var(--line)" }} />
+          <div className="rz-display text-lg mb-1">Nenhuma meta cadastrada</div>
+          <p className="text-sm mb-4" style={{ color: "var(--ink-soft)" }}>Uma viagem, uma reserva de emergência, o que você quiser juntar.</p>
+          <button onClick={onOpenNew} className="rz-btn-primary rz-focus text-sm inline-flex items-center gap-2">
+            <Plus size={16} /> Criar meta
+          </button>
+        </div>
+      ) : (
+        <div className="grid sm:grid-cols-2 gap-4">
+          {goals.map((g) => <GoalCard key={g.id} goal={g} onEdit={onOpenEdit} onDelete={onDelete} onContribute={onContribute} onDeleteHistoryEntry={onDeleteHistoryEntry} />)}
+        </div>
+      )}
+
+      {showGoalForm && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-6" style={{ background: "rgba(30,43,35,0.45)" }}>
+          <div className="rz-card w-full sm:max-w-md p-5 sm:p-6" style={{ borderRadius: "14px 14px 0 0" }}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="rz-display text-xl">{editingGoalId ? "Editar meta" : "Nova meta"}</h2>
+              <button onClick={onCancelForm} className="rz-focus" style={{ color: "var(--ink-soft)" }} aria-label="Fechar"><X size={20} /></button>
+            </div>
+            <div className="flex flex-col gap-3">
+              <div>
+                <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Nome da meta</label>
+                <input className="rz-input rz-focus" placeholder="Ex: Viagem, Reserva de emergência…" value={goalForm.title} onChange={(e) => setGoalForm({ ...goalForm, title: e.target.value })} />
+              </div>
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Valor alvo (R$)</label>
+                  <input className="rz-input rz-focus rz-mono" inputMode="decimal" placeholder="0,00" value={goalForm.targetAmount} onChange={(e) => setGoalForm({ ...goalForm, targetAmount: e.target.value })} />
+                </div>
+                <div className="flex-1">
+                  <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Data alvo (opcional)</label>
+                  <input type="date" className="rz-input rz-focus rz-mono" value={goalForm.deadline} onChange={(e) => setGoalForm({ ...goalForm, deadline: e.target.value })} />
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {COLOR_PALETTE.map((color) => (
+                  <button key={color} onClick={() => setGoalForm({ ...goalForm, color })} className="rz-focus w-6 h-6 rounded-full" style={{ background: color, boxShadow: goalForm.color === color ? "0 0 0 2px #fff, 0 0 0 4px var(--ink)" : "none" }} aria-label={`Cor ${color}`} />
+                ))}
+              </div>
+              {goalError && <div className="text-xs" style={{ color: "var(--brick)" }}>{goalError}</div>}
+              <div className="flex gap-2 mt-2">
+                <button onClick={onCancelForm} className="rz-btn-ghost rz-focus flex-1 text-sm">Cancelar</button>
+                <button onClick={onSubmit} className="rz-btn-primary rz-focus flex-1 text-sm flex items-center justify-center gap-2"><Check size={16} /> {editingGoalId ? "Salvar alterações" : "Criar meta"}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GoalCard({ goal, onEdit, onDelete, onContribute, onDeleteHistoryEntry }) {
+  const [amount, setAmount] = useState("");
+  const [showHistory, setShowHistory] = useState(false);
+  const history = goal.history || [];
+  const pct = goal.targetAmount > 0 ? (goal.currentAmount / goal.targetAmount) * 100 : 0;
+  const done = goal.currentAmount >= goal.targetAmount;
+  const remaining = Math.max(0, goal.targetAmount - goal.currentAmount);
+
+  let monthlySuggestion = null;
+  let deadlinePassed = false;
+  if (goal.deadline && !done) {
+    const now = new Date(); now.setHours(0, 0, 0, 0);
+    const deadline = new Date(goal.deadline + "T00:00:00");
+    const diffDays = Math.ceil((deadline - now) / 86400000);
+    if (diffDays <= 0) {
+      deadlinePassed = true;
+    } else {
+      const monthsLeft = Math.max(1, Math.round(diffDays / 30.44));
+      monthlySuggestion = remaining / monthsLeft;
+    }
+  }
+
+  const submitDelta = (sign) => {
+    const num = parseFloat(String(amount).replace(",", "."));
+    if (!num || num <= 0) return;
+    onContribute(goal.id, num * sign);
+    setAmount("");
+  };
+
+  return (
+    <div className="rz-card p-4 sm:p-5">
+      <div className="flex items-start justify-between mb-2 gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="rz-dot" style={{ background: goal.color }} />
+          <span className="text-sm font-medium truncate">{goal.title}</span>
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          <button onClick={() => onEdit(goal)} className="rz-focus p-1 rounded-md" aria-label="Editar meta" style={{ color: "var(--ink-soft)" }}><Pencil size={13} /></button>
+          <button onClick={() => onDelete(goal)} className="rz-focus p-1 rounded-md" aria-label="Excluir meta" style={{ color: "var(--ink-soft)" }}><Trash2 size={13} /></button>
+        </div>
+      </div>
+
+      <div className="flex items-baseline justify-between mb-2">
+        <span className="rz-mono text-lg font-semibold" style={{ color: done ? "var(--emerald)" : "var(--ink)" }}>{formatCurrency(goal.currentAmount)}</span>
+        <span className="rz-mono text-xs" style={{ color: "var(--ink-soft)" }}>de {formatCurrency(goal.targetAmount)}</span>
+      </div>
+
+      <div className="rz-progress-track mb-1">
+        <div className="rz-progress-fill" style={{ width: `${Math.min(pct, 100)}%`, background: done ? "var(--emerald)" : goal.color }} />
+      </div>
+
+      <div className="flex items-center justify-between mb-3">
+        <span className="rz-mono text-[11px]" style={{ color: "var(--ink-soft)" }}>{pct.toFixed(0)}%</span>
+        {goal.deadline && <span className="text-[11px]" style={{ color: "var(--ink-soft)" }}>até {formatDateBR(goal.deadline)}</span>}
+      </div>
+
+      {!done && goal.deadline && (
+        <div className="rounded-lg px-3 py-2 mb-3 text-xs" style={{ background: "var(--paper-alt)", color: deadlinePassed ? "var(--brick)" : "var(--ink-soft)" }}>
+          {deadlinePassed ? (
+            "Prazo da meta já passou — ajuste a data ou dê um empurrão no valor."
+          ) : (
+            <>Economize <span className="rz-mono font-semibold" style={{ color: "var(--ink)" }}>{formatCurrency(monthlySuggestion)}</span>/mês para chegar lá até {formatDateBR(goal.deadline)}</>
+          )}
+        </div>
+      )}
+
+      {done ? (
+        <span className="rz-stamp rz-stamp-pago inline-flex items-center gap-1"><PartyPopper size={11} /> Meta concluída</span>
+      ) : (
+        <div className="flex items-center gap-2">
+          <input className="rz-input rz-focus rz-mono text-sm flex-1" inputMode="decimal" placeholder="Valor" value={amount} onChange={(e) => setAmount(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submitDelta(1)} />
+          <button onClick={() => submitDelta(1)} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--emerald)" }} aria-label="Adicionar valor"><Plus size={16} /></button>
+          <button onClick={() => submitDelta(-1)} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--brick)" }} aria-label="Retirar valor"><Minus size={16} /></button>
+        </div>
+      )}
+
+      {history.length > 0 && (
+        <div className="mt-3 pt-3" style={{ borderTop: "1px solid var(--line)" }}>
+          <button onClick={() => setShowHistory((v) => !v)} className="rz-focus text-xs font-medium flex items-center gap-1" style={{ color: "var(--ink-soft)" }}>
+            <History size={13} /> {showHistory ? "Ocultar" : "Ver"} histórico ({history.length})
+          </button>
+          {showHistory && (
+            <div className="flex flex-col mt-2 max-h-40 overflow-y-auto">
+              {[...history].reverse().map((h) => (
+                <div key={h.id} className="flex items-center gap-2 py-1.5" style={{ borderTop: "1px solid var(--line)" }}>
+                  <span className="rz-mono text-[11px] flex-1" style={{ color: "var(--ink-soft)" }}>{formatDateBR(h.date)}</span>
+                  <span className="rz-mono text-xs font-semibold" style={{ color: h.amount >= 0 ? "var(--emerald)" : "var(--brick)" }}>
+                    {h.amount >= 0 ? "+ " : "− "}{formatCurrency(Math.abs(h.amount))}
+                  </span>
+                  <button onClick={() => onDeleteHistoryEntry(goal.id, h.id)} className="rz-focus p-1 rounded-md" aria-label="Excluir movimentação" style={{ color: "var(--ink-soft)" }}>
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FixedBillsTab({
+  fixedBills, transactions, refDate, shiftMonth, categoriesByType, banksList, findCategory, findBank,
+  onLaunch, onUndoLaunch, onToggleActive,
+  fixedForm, setFixedForm, showFixedForm, setShowFixedForm, editingFixedId, fixedFormError,
+  onOpenNew, onOpenEdit, onSubmit, onDelete, onCancelForm, onTypeChange,
+}) {
+  const enriched = useMemo(() => enrichFixedBills(fixedBills, transactions, refDate), [fixedBills, transactions, refDate]);
+
+  const activeBills = [...enriched].filter((b) => b.active).sort((a, b) => a.day - b.day);
+  const inactiveBills = enriched.filter((b) => !b.active);
+
+  const totalMensal = activeBills.filter((b) => b.type === "despesa").reduce((s, b) => s + b.amount, 0);
+  const launchedCount = activeBills.filter((b) => b.status === "lancada").length;
+
+  const STATUS_LABEL = FIXED_STATUS_LABEL;
+  const STATUS_CLASS = FIXED_STATUS_CLASS;
+
+  return (
+    <div>
+      <header className="mb-6">
+        <h1 className="rz-display text-2xl md:text-3xl">Contas Fixas</h1>
+        <p className="text-sm mt-1" style={{ color: "var(--ink-soft)" }}>
+          Cadastre suas contas recorrentes e lance com um clique quando forem pagas.
+        </p>
+      </header>
+
+      <PeriodNavigator periodMode="mes" refDate={refDate} shiftMonth={shiftMonth} setPeriodMode={() => {}} hideToggle />
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
+        <SummaryCard label="Total mensal (fixas ativas)" value={totalMensal} icon={Repeat} tone="brick" />
+        <div className="rz-card p-4 flex items-center justify-between">
+          <div>
+            <div className="text-xs mb-1" style={{ color: "var(--ink-soft)" }}>Status deste mês</div>
+            <div className="rz-mono text-sm">
+              <span style={{ color: "var(--emerald)" }}>{launchedCount} lançada{launchedCount !== 1 ? "s" : ""}</span>
+              <span style={{ color: "var(--ink-soft)" }}> · </span>
+              <span style={{ color: "var(--ink-soft)" }}>{activeBills.length - launchedCount} pendente{activeBills.length - launchedCount !== 1 ? "s" : ""}</span>
+            </div>
+          </div>
+          <button onClick={onOpenNew} className="rz-btn-primary rz-focus flex items-center gap-2 text-sm whitespace-nowrap">
+            <Plus size={16} /> Nova conta fixa
+          </button>
+        </div>
+      </div>
+
+      {activeBills.length === 0 && inactiveBills.length === 0 ? (
+        <div className="rz-card p-10 text-center">
+          <Repeat size={26} className="mx-auto mb-3" style={{ color: "var(--line)" }} />
+          <div className="rz-display text-lg mb-1">Nenhuma conta fixa cadastrada</div>
+          <p className="text-sm mb-4" style={{ color: "var(--ink-soft)" }}>
+            Aluguel, internet, assinaturas… cadastre uma vez e acompanhe todo mês.
+          </p>
+          <button onClick={onOpenNew} className="rz-btn-primary rz-focus text-sm inline-flex items-center gap-2">
+            <Plus size={16} /> Cadastrar conta fixa
+          </button>
+        </div>
+      ) : (
+        <>
+          <div className="rz-card overflow-hidden mb-4">
+            {activeBills.map((b, i) => {
+              const cat = findCategory(b.type, b.category);
+              const bank = b.account ? findBank(b.account) : null;
+              return (
+                <div key={b.id} className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 px-4 py-3" style={{ borderTop: i === 0 ? "none" : "1px solid var(--line)" }}>
+                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                    <span className="rz-dot" style={{ background: cat.color }} />
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium truncate">{b.description}</div>
+                      <div className="text-xs" style={{ color: "var(--ink-soft)" }}>
+                        {cat.label}{bank ? ` · ${bank.label}` : ""} · Vence dia {b.dueDay}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="rz-mono text-sm font-semibold w-28 shrink-0" style={{ color: b.type === "receita" ? "var(--emerald)" : "var(--brick)" }}>
+                    {formatCurrency(b.amount)}
+                  </div>
+                  <span className={`rz-stamp shrink-0 ${STATUS_CLASS[b.status]}`}>
+                    {b.status === "atrasada" && <AlertCircle size={11} />} {STATUS_LABEL[b.status]}
+                  </span>
+                  <div className="flex items-center gap-1.5 shrink-0 justify-end">
+                    {b.status === "lancada" ? (
+                      <button onClick={() => onUndoLaunch(b)} className="rz-btn-ghost rz-focus text-xs !py-1.5 !px-3">Desfazer</button>
+                    ) : (
+                      <button onClick={() => onLaunch(b)} className="rz-btn-primary rz-focus text-xs !py-1.5 !px-3">Lançar</button>
+                    )}
+                    <button onClick={() => onToggleActive(b)} className="rz-focus p-1.5 rounded-md" aria-label="Pausar" style={{ color: "var(--ink-soft)" }}>
+                      <PauseCircle size={15} />
+                    </button>
+                    <button onClick={() => onOpenEdit(b)} className="rz-focus p-1.5 rounded-md" aria-label="Editar" style={{ color: "var(--ink-soft)" }}>
+                      <Pencil size={15} />
+                    </button>
+                    <button onClick={() => onDelete(b)} className="rz-focus p-1.5 rounded-md" aria-label="Excluir" style={{ color: "var(--ink-soft)" }}>
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {inactiveBills.length > 0 && (
+            <>
+              <h3 className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: "var(--ink-soft)" }}>Pausadas</h3>
+              <div className="rz-card overflow-hidden opacity-60">
+                {inactiveBills.map((b, i) => {
+                  const cat = findCategory(b.type, b.category);
+                  return (
+                    <div key={b.id} className="flex items-center gap-3 px-4 py-3" style={{ borderTop: i === 0 ? "none" : "1px solid var(--line)" }}>
+                      <span className="rz-dot" style={{ background: cat.color }} />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm truncate">{b.description}</div>
+                        <div className="text-xs" style={{ color: "var(--ink-soft)" }}>{cat.label} · Vence dia {b.dueDay}</div>
+                      </div>
+                      <div className="rz-mono text-sm w-24 text-right shrink-0" style={{ color: "var(--ink-soft)" }}>{formatCurrency(b.amount)}</div>
+                      <button onClick={() => onToggleActive(b)} className="rz-focus p-1.5 rounded-md" aria-label="Reativar" style={{ color: "var(--emerald)" }}>
+                        <PlayCircle size={15} />
+                      </button>
+                      <button onClick={() => onDelete(b)} className="rz-focus p-1.5 rounded-md" aria-label="Excluir" style={{ color: "var(--ink-soft)" }}>
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </>
+      )}
+
+      {/* Form modal */}
+      {showFixedForm && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-6" style={{ background: "rgba(30,43,35,0.45)" }}>
+          <div className="rz-card w-full sm:max-w-md p-5 sm:p-6" style={{ borderRadius: "14px 14px 0 0" }}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="rz-display text-xl">{editingFixedId ? "Editar conta fixa" : "Nova conta fixa"}</h2>
+              <button onClick={onCancelForm} className="rz-focus" style={{ color: "var(--ink-soft)" }} aria-label="Fechar">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="rz-toggle mb-4">
+              <button onClick={() => onTypeChange("receita")} className={fixedForm.type === "receita" ? "receita-on" : "off"}>Receita</button>
+              <button onClick={() => onTypeChange("despesa")} className={fixedForm.type === "despesa" ? "despesa-on" : "off"}>Despesa</button>
+            </div>
+
+            <div className="flex flex-col gap-3">
+              <div>
+                <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Descrição</label>
+                <input className="rz-input rz-focus" placeholder="Ex: Aluguel, Internet, Netflix…" value={fixedForm.description} onChange={(e) => setFixedForm({ ...fixedForm, description: e.target.value })} />
+              </div>
+
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Valor a partir deste mês (R$)</label>
+                  <input className="rz-input rz-focus rz-mono" inputMode="decimal" placeholder="0,00" value={fixedForm.amount} onChange={(e) => setFixedForm({ ...fixedForm, amount: e.target.value })} />
+                </div>
+                <div className="flex-1">
+                  <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Dia do vencimento</label>
+                  <input type="number" min="1" max="31" className="rz-input rz-focus rz-mono" value={fixedForm.dueDay} onChange={(e) => setFixedForm({ ...fixedForm, dueDay: e.target.value })} />
+                </div>
+              </div>
+              {editingFixedId && (
+                <p className="text-xs -mt-2" style={{ color: "var(--ink-soft)" }}>
+                  Mudar o valor só afeta {MONTHS[refDate.getMonth()]}/{refDate.getFullYear()} em diante — os meses anteriores mantêm o valor antigo.
+                </p>
+              )}
+
+              <div>
+                <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Categoria</label>
+                <select className="rz-input rz-focus" value={fixedForm.category} onChange={(e) => setFixedForm({ ...fixedForm, category: e.target.value })}>
+                  <option value="" disabled>Selecione</option>
+                  {categoriesByType[fixedForm.type].map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Banco / Conta (opcional)</label>
+                <select className="rz-input rz-focus" value={fixedForm.account} onChange={(e) => setFixedForm({ ...fixedForm, account: e.target.value })}>
+                  <option value="">Nenhum selecionado</option>
+                  {banksList.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
+                </select>
+              </div>
+
+              {fixedFormError && <div className="text-xs" style={{ color: "var(--brick)" }}>{fixedFormError}</div>}
+
+              <div className="flex gap-2 mt-2">
+                <button onClick={onCancelForm} className="rz-btn-ghost rz-focus flex-1 text-sm">Cancelar</button>
+                <button onClick={onSubmit} className="rz-btn-primary rz-focus flex-1 text-sm flex items-center justify-center gap-2">
+                  <Check size={16} /> {editingFixedId ? "Salvar alterações" : "Adicionar"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VisaoGeralTab({ transactions, periodFiltered, totals, refDate, periodMode, shiftMonth, setPeriodMode, findCategory, setActiveTab, fixedBills, findBank, onLaunchFixedBill }) {
+  const saldoTotal = useMemo(
+    () => transactions.filter((t) => t.status === "pago").reduce((s, t) => s + (t.type === "receita" ? t.amount : -t.amount), 0),
+    [transactions]
+  );
+
+  const pendingFixedBills = useMemo(() => {
+    return enrichFixedBills(fixedBills, transactions, refDate)
+      .filter((b) => b.active && b.type === "despesa" && b.status !== "lancada")
+      .sort((a, b) => a.day - b.day);
+  }, [fixedBills, transactions, refDate]);
+
+  const pendingFixedTotal = pendingFixedBills.reduce((s, b) => s + b.amount, 0);
+
+  const trendData = useMemo(() => {
+    const months = [];
+    for (let i = 5; i >= 0; i--) months.push(new Date(refDate.getFullYear(), refDate.getMonth() - i, 1));
+    return months.map((d) => {
+      const endOfMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59);
+      const saldo = transactions
+        .filter((t) => t.status === "pago" && new Date(t.date + "T00:00:00") <= endOfMonth)
+        .reduce((s, t) => s + (t.type === "receita" ? t.amount : -t.amount), 0);
+      return { mes: `${MONTHS[d.getMonth()].slice(0, 3)}/${String(d.getFullYear()).slice(2)}`, saldo };
+    });
+  }, [transactions, refDate]);
+
+  const expensesByCategory = useMemo(() => {
+    const map = {};
+    periodFiltered.filter((t) => t.type === "despesa").forEach((t) => { map[t.category] = (map[t.category] || 0) + Number(t.amount); });
+    return Object.entries(map)
+      .map(([catId, value]) => { const cat = findCategory("despesa", catId); return { name: cat.label, value, color: cat.color }; })
+      .sort((a, b) => b.value - a.value);
+  }, [periodFiltered, findCategory]);
+
+  const topExpenses = useMemo(
+    () => [...periodFiltered].filter((t) => t.type === "despesa").sort((a, b) => b.amount - a.amount).slice(0, 5),
+    [periodFiltered]
+  );
+
+  const hasAnyData = transactions.length > 0;
+
+  const tooltipStyle = { background: "#fff", border: "1px solid var(--line)", borderRadius: 8, fontSize: 12, fontFamily: "IBM Plex Mono, monospace" };
+
+  return (
+    <>
+      <header className="mb-6">
+        <h1 className="rz-display text-2xl md:text-3xl">Visão Geral</h1>
+        <p className="text-sm mt-1" style={{ color: "var(--ink-soft)" }}>Seu razão resumido em um só lugar.</p>
+      </header>
+
+      {!hasAnyData ? (
+        <div className="rz-card p-10 text-center max-w-md">
+          <Home size={26} className="mx-auto mb-3" style={{ color: "var(--line)" }} />
+          <div className="rz-display text-lg mb-1">Ainda não há nada para mostrar</div>
+          <p className="text-sm mb-4" style={{ color: "var(--ink-soft)" }}>
+            Assim que você registrar seus primeiros lançamentos, os gráficos e o resumo aparecem aqui.
+          </p>
+          <button onClick={() => setActiveTab("lancamentos")} className="rz-btn-primary rz-focus text-sm inline-flex items-center gap-2">
+            <Plus size={16} /> Ir para Lançamentos
+          </button>
+        </div>
+      ) : (
+        <>
+          <PeriodNavigator periodMode={periodMode} refDate={refDate} shiftMonth={shiftMonth} setPeriodMode={setPeriodMode} />
+
+          {/* Summary cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+            <SummaryCard label="Saldo total" value={saldoTotal} icon={Scale} tone={saldoTotal >= 0 ? "emerald" : "brick"} />
+            <SummaryCard label="Receitas do período" value={totals.receitas} icon={TrendingUp} tone="emerald" />
+            <SummaryCard label="Despesas do período" value={totals.despesas} icon={TrendingDown} tone="brick" />
+            <SummaryCard label="Saldo projetado" value={totals.saldo} icon={Scale} tone={totals.saldo >= 0 ? "emerald" : "brick"} />
+          </div>
+
+          {/* Balance trend */}
+          <div className="rz-card p-4 sm:p-5 mb-4">
+            <h2 className="text-sm font-semibold mb-4">Evolução do saldo — últimos 6 meses</h2>
+            <ResponsiveContainer width="100%" height={220}>
+              <LineChart data={trendData} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
+                <CartesianGrid stroke="var(--line)" vertical={false} />
+                <XAxis dataKey="mes" tick={{ fontSize: 11, fontFamily: "IBM Plex Mono, monospace", fill: "#56685C" }} axisLine={{ stroke: "var(--line)" }} tickLine={false} />
+                <YAxis tickFormatter={formatCompact} tick={{ fontSize: 11, fontFamily: "IBM Plex Mono, monospace", fill: "#56685C" }} axisLine={false} tickLine={false} width={48} />
+                <Tooltip formatter={(v) => formatCurrency(v)} contentStyle={tooltipStyle} labelStyle={{ color: "var(--ink)", fontWeight: 600 }} />
+                <Line type="monotone" dataKey="saldo" name="Saldo" stroke="#1B5E4F" strokeWidth={2.5} dot={{ r: 3, fill: "#1B5E4F" }} activeDot={{ r: 5 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Pending fixed bills */}
+          {pendingFixedBills.length > 0 && (
+            <div className="rz-card p-4 sm:p-5 mb-4">
+              <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
+                <h2 className="text-sm font-semibold">Contas fixas ainda não pagas</h2>
+                <span className="rz-mono text-xs" style={{ color: "var(--brick)" }}>
+                  Total: {formatCurrency(pendingFixedTotal)}
+                </span>
+              </div>
+              <p className="text-xs mb-3" style={{ color: "var(--ink-soft)" }}>
+                Já registradas, mas ainda pendentes de pagamento neste período — fique de olho nos vencimentos.
+              </p>
+              <div className="flex flex-col">
+                {pendingFixedBills.map((b, i) => {
+                  const cat = findCategory("despesa", b.category);
+                  return (
+                    <div key={b.id} className="flex items-center gap-3 py-2" style={{ borderTop: i === 0 ? "none" : "1px solid var(--line)" }}>
+                      <span className="rz-dot" style={{ background: cat.color }} />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm truncate">{b.description}</div>
+                        <div className="text-xs" style={{ color: "var(--ink-soft)" }}>{cat.label} · Vence dia {b.dueDay}</div>
+                      </div>
+                      <span className={`rz-stamp shrink-0 ${FIXED_STATUS_CLASS[b.status]}`}>
+                        {b.status === "atrasada" && <AlertCircle size={11} />} {FIXED_STATUS_LABEL[b.status]}
+                      </span>
+                      <div className="rz-mono text-sm font-semibold w-24 text-right shrink-0" style={{ color: "var(--brick)" }}>{formatCurrency(b.amount)}</div>
+                      <button onClick={() => onLaunchFixedBill(b)} className="rz-btn-ghost rz-focus text-xs !py-1.5 !px-3 shrink-0">Lançar</button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className="grid md:grid-cols-2 gap-4">
+            {/* Expenses by category */}
+            <div className="rz-card p-4 sm:p-5">
+              <h2 className="text-sm font-semibold mb-2">Despesas por categoria</h2>
+              {expensesByCategory.length === 0 ? (
+                <p className="text-sm py-10 text-center" style={{ color: "var(--ink-soft)" }}>Nenhuma despesa neste período.</p>
+              ) : (
+                <>
+                  <ResponsiveContainer width="100%" height={200}>
+                    <PieChart>
+                      <Pie data={expensesByCategory} dataKey="value" nameKey="name" innerRadius={50} outerRadius={80} paddingAngle={2}>
+                        {expensesByCategory.map((entry, i) => <Cell key={i} fill={entry.color} stroke="#fff" strokeWidth={2} />)}
+                      </Pie>
+                      <Tooltip formatter={(v) => formatCurrency(v)} contentStyle={tooltipStyle} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1.5 mt-3">
+                    {expensesByCategory.map((c) => (
+                      <div key={c.name} className="flex items-center gap-1.5 text-xs">
+                        <span className="rz-dot" style={{ background: c.color }} />
+                        <span style={{ color: "var(--ink-soft)" }}>{c.name}</span>
+                        <span className="rz-mono font-semibold">{formatCurrency(c.value)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Top 5 expenses */}
+            <div className="rz-card p-4 sm:p-5">
+              <h2 className="text-sm font-semibold mb-2">Maiores gastos do período</h2>
+              {topExpenses.length === 0 ? (
+                <p className="text-sm py-10 text-center" style={{ color: "var(--ink-soft)" }}>Nenhuma despesa neste período.</p>
+              ) : (
+                <div className="flex flex-col">
+                  {topExpenses.map((t, i) => {
+                    const cat = findCategory("despesa", t.category);
+                    return (
+                      <div key={t.id} className="flex items-center gap-3 py-2" style={{ borderTop: i === 0 ? "none" : "1px solid var(--line)" }}>
+                        <span className="rz-mono text-xs w-4" style={{ color: "var(--ink-soft)" }}>{i + 1}</span>
+                        <span className="rz-dot" style={{ background: cat.color }} />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm truncate">{t.description}</div>
+                          <div className="text-xs" style={{ color: "var(--ink-soft)" }}>{cat.label}</div>
+                        </div>
+                        <div className="rz-mono text-sm font-semibold shrink-0" style={{ color: "var(--brick)" }}>{formatCurrency(t.amount)}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+function BancosTab({ banksList, customBanks, bankForm, setBankForm, bankError, onAdd, onDelete, hiddenCount, onRestore }) {
+  return (
+    <div className="max-w-md mx-auto">
+      <header className="mb-6">
+        <h1 className="rz-display text-2xl md:text-3xl">Contas e Cartões</h1>
+        <p className="text-sm mt-1" style={{ color: "var(--ink-soft)" }}>
+          Cadastre seus bancos, carteiras e cartões para escolher rapidinho em cada lançamento. Saldo e limite de cartão chegam numa próxima etapa.
+        </p>
+      </header>
+
+      <div className="rz-card p-5 mb-6">
+        <h2 className="text-sm font-semibold mb-3">Novo banco ou conta</h2>
+        <div className="flex flex-col sm:flex-row gap-3 mb-3">
+          <input
+            className="rz-input rz-focus flex-1"
+            placeholder="Nome (ex: Nubank, Inter, Caixinha…)"
+            value={bankForm.label}
+            onChange={(e) => setBankForm({ ...bankForm, label: e.target.value })}
+            onKeyDown={(e) => e.key === "Enter" && onAdd()}
+          />
+          <button onClick={onAdd} className="rz-btn-primary rz-focus flex items-center justify-center gap-2 text-sm whitespace-nowrap">
+            <Plus size={16} /> Adicionar
+          </button>
+        </div>
+        <div className="flex flex-wrap gap-2 mb-1">
+          {COLOR_PALETTE.map((color) => (
+            <button
+              key={color}
+              onClick={() => setBankForm({ ...bankForm, color })}
+              className="rz-focus w-6 h-6 rounded-full"
+              style={{
+                background: color,
+                boxShadow: bankForm.color === color ? "0 0 0 2px #fff, 0 0 0 4px var(--ink)" : "none",
+              }}
+              aria-label={`Cor ${color}`}
+            />
+          ))}
+        </div>
+        {bankError && <div className="text-xs mt-2" style={{ color: "var(--brick)" }}>{bankError}</div>}
+      </div>
+
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--ink-soft)" }}>Seus bancos e carteiras</h3>
+        {hiddenCount > 0 && (
+          <button onClick={onRestore} className="rz-focus text-xs font-medium" style={{ color: "var(--emerald)" }}>
+            Restaurar {hiddenCount} padrão{hiddenCount > 1 ? "ões" : ""} removido{hiddenCount > 1 ? "s" : ""}
+          </button>
+        )}
+      </div>
+      <div className="rz-card overflow-hidden">
+        {banksList.map((b, i) => (
+          <CategoryRow key={b.id} cat={b} isFirst={i === 0} isCustom={customBanks.some((x) => x.id === b.id)} onDelete={onDelete} />
+        ))}
+      </div>
+      <p className="text-xs mt-4" style={{ color: "var(--ink-soft)" }}>
+        Excluir um banco não apaga lançamentos que já usam ele — eles continuam aparecendo normalmente.
+      </p>
+    </div>
+  );
+}
+
+function CategoriasTab({ categoriesByType, customCategories, categoryForm, setCategoryForm, categoryError, onAdd, onDelete, hiddenCount, onRestore }) {
+  return (
+    <div className="max-w-2xl mx-auto">
+      <header className="mb-6 flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="rz-display text-2xl md:text-3xl">Categorias</h1>
+          <p className="text-sm mt-1" style={{ color: "var(--ink-soft)" }}>
+            Além das categorias padrão, crie as suas para deixar os lançamentos do seu jeito.
+          </p>
+        </div>
+        {hiddenCount > 0 && (
+          <button onClick={onRestore} className="rz-focus text-xs font-medium" style={{ color: "var(--emerald)" }}>
+            Restaurar {hiddenCount} padrão{hiddenCount > 1 ? "ões" : ""} removido{hiddenCount > 1 ? "s" : ""}
+          </button>
+        )}
+      </header>
+
+      {/* New category form */}
+      <div className="rz-card p-5 mb-6">
+        <h2 className="text-sm font-semibold mb-3">Nova categoria</h2>
+
+        <div className="rz-toggle mb-3">
+          <button onClick={() => setCategoryForm({ ...categoryForm, type: "receita" })} className={categoryForm.type === "receita" ? "receita-on" : "off"}>Receita</button>
+          <button onClick={() => setCategoryForm({ ...categoryForm, type: "despesa" })} className={categoryForm.type === "despesa" ? "despesa-on" : "off"}>Despesa</button>
+        </div>
+
+        <div className="flex flex-col sm:flex-row gap-3 mb-3">
+          <input
+            className="rz-input rz-focus flex-1"
+            placeholder="Nome da categoria (ex: Pet, Viagens…)"
+            value={categoryForm.label}
+            onChange={(e) => setCategoryForm({ ...categoryForm, label: e.target.value })}
+            onKeyDown={(e) => e.key === "Enter" && onAdd()}
+          />
+          <button onClick={onAdd} className="rz-btn-primary rz-focus flex items-center justify-center gap-2 text-sm whitespace-nowrap">
+            <Plus size={16} /> Adicionar
+          </button>
+        </div>
+
+        <div className="flex flex-wrap gap-2 mb-1">
+          {COLOR_PALETTE.map((color) => (
+            <button
+              key={color}
+              onClick={() => setCategoryForm({ ...categoryForm, color })}
+              className="rz-focus w-6 h-6 rounded-full"
+              style={{
+                background: color,
+                boxShadow: categoryForm.color === color ? "0 0 0 2px #fff, 0 0 0 4px var(--ink)" : "none",
+              }}
+              aria-label={`Cor ${color}`}
+            />
+          ))}
+        </div>
+
+        {categoryError && <div className="text-xs mt-2" style={{ color: "var(--brick)" }}>{categoryError}</div>}
+      </div>
+
+      {/* Category lists */}
+      <div className="grid sm:grid-cols-2 gap-4">
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: "var(--ink-soft)" }}>Receitas</h3>
+          <div className="rz-card overflow-hidden">
+            {categoriesByType.receita.map((c, i) => (
+              <CategoryRow key={c.id} cat={c} isFirst={i === 0} isCustom={customCategories.some((x) => x.id === c.id)} onDelete={onDelete} />
+            ))}
+          </div>
+        </div>
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: "var(--ink-soft)" }}>Despesas</h3>
+          <div className="rz-card overflow-hidden">
+            {categoriesByType.despesa.map((c, i) => (
+              <CategoryRow key={c.id} cat={c} isFirst={i === 0} isCustom={customCategories.some((x) => x.id === c.id)} onDelete={onDelete} />
+            ))}
+          </div>
+        </div>
+      </div>
+      <p className="text-xs mt-4" style={{ color: "var(--ink-soft)" }}>
+        Excluir uma categoria não apaga lançamentos que já usam ela — eles continuam aparecendo normalmente.
+      </p>
+    </div>
+  );
+}
+
+function CategoryRow({ cat, isFirst, isCustom, onDelete }) {
+  return (
+    <div className="flex items-center gap-2 px-3 py-2.5" style={{ borderTop: isFirst ? "none" : "1px solid var(--line)" }}>
+      <span className="rz-dot" style={{ background: cat.color }} />
+      <span className="text-sm flex-1 truncate">{cat.label}</span>
+      {!isCustom && <span className="rz-mono text-[9px] opacity-50">PADRÃO</span>}
+      <button onClick={() => onDelete(cat)} className="rz-focus p-1 rounded-md" aria-label="Excluir" style={{ color: "var(--ink-soft)" }}>
+        <Trash2 size={14} />
+      </button>
+    </div>
+  );
+}
+
+function PlaceholderTab({ item }) {
+  if (!item) return null;
+  const Icon = item.icon;
+  return (
+    <div className="rz-card p-10 text-center max-w-md mx-auto mt-10">
+      <Icon size={26} className="mx-auto mb-3" style={{ color: "var(--line)" }} />
+      <h2 className="rz-display text-xl mb-2">{item.label}</h2>
+      <p className="text-sm mb-4" style={{ color: "var(--ink-soft)" }}>{item.note}</p>
+      <span className="rz-stamp rz-stamp-pendente">Em breve</span>
+    </div>
+  );
+}
