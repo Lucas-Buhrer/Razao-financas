@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import {
-  BookOpen, Home, Receipt, Repeat, Target, BarChart3,
+  BookOpen, Home, Receipt, Repeat, Target, BarChart3, Landmark,
   Plus, Trash2, Pencil, X, Check, Search, ChevronLeft, ChevronRight,
   TrendingUp, TrendingDown, Scale, Undo2, Menu, AlertCircle, PauseCircle, PlayCircle,
   PiggyBank, Minus, PartyPopper, History, Settings, RotateCcw, LogOut,
@@ -47,6 +47,7 @@ const NAV_ITEMS = [
   { id: "visao-geral", label: "Visão Geral", icon: Home, ready: true },
   { id: "lancamentos", label: "Lançamentos", icon: Receipt, ready: true },
   { id: "fixas", label: "Contas Fixas", icon: Repeat, ready: true },
+  { id: "poupanca", label: "Poupança", icon: Landmark, ready: true },
   { id: "orcamento", label: "Orçamento", icon: Target, ready: true },
   { id: "metas", label: "Metas", icon: PiggyBank, ready: true },
   { id: "relatorios", label: "Relatórios", icon: BarChart3, ready: true },
@@ -58,6 +59,13 @@ const MONTHS = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","A
 const COLOR_PALETTE = [
   "#1B5E4F", "#2E7D63", "#3E8E75", "#6FA88F", "#4A6FA5", "#3A7A8C",
   "#A83B2E", "#B8562A", "#C17A3A", "#9C4A56", "#B8873A", "#7A6A9E", "#8A5A7A", "#6B5B3E",
+];
+
+const DEFAULT_SAVINGS_SEED = [
+  { label: "Reserva de Emergência", color: "#1B5E4F" },
+  { label: "Investimentos", color: "#4A6FA5" },
+  { label: "Viagem", color: "#B8873A" },
+  { label: "Aposentadoria", color: "#7A6A9E" },
 ];
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -210,6 +218,11 @@ export default function App() {
   const [showFixedForm, setShowFixedForm] = useState(false);
   const [editingFixedId, setEditingFixedId] = useState(null);
   const [fixedFormError, setFixedFormError] = useState("");
+
+  const [savingsAccounts, setSavingsAccounts] = useState([]);
+  const [savingsLoaded, setSavingsLoaded] = useState(false);
+  const [savingsForm, setSavingsForm] = useState({ label: "", color: COLOR_PALETTE[0] });
+  const [savingsError, setSavingsError] = useState("");
 
   const [budgets, setBudgets] = useState([]);
   const [budgetsLoaded, setBudgetsLoaded] = useState(false);
@@ -414,6 +427,36 @@ export default function App() {
       }
     })();
   }, [fixedBills, fixedBillsLoaded]);
+
+  // ---------- Load savings accounts (semeia categorias padrão na primeira vez) ----------
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await storage.get("poupanca", false);
+        if (res && res.value) {
+          setSavingsAccounts(JSON.parse(res.value));
+        } else {
+          setSavingsAccounts(DEFAULT_SAVINGS_SEED.map((s) => ({ id: uid(), ...s, currentAmount: 0, history: [] })));
+        }
+      } catch (e) {
+        setSavingsAccounts(DEFAULT_SAVINGS_SEED.map((s) => ({ id: uid(), ...s, currentAmount: 0, history: [] })));
+      } finally {
+        setSavingsLoaded(true);
+      }
+    })();
+  }, []);
+
+  // ---------- Save savings accounts ----------
+  useEffect(() => {
+    if (!savingsLoaded) return;
+    (async () => {
+      try {
+        await storage.set("poupanca", JSON.stringify(savingsAccounts), false);
+      } catch (e) {
+        setLoadError(true);
+      }
+    })();
+  }, [savingsAccounts, savingsLoaded]);
 
   // ---------- Load budgets ----------
   useEffect(() => {
@@ -699,6 +742,40 @@ export default function App() {
     setTransactions((prev) => prev.filter((t) => !(t.recurringId === bill.id && t.recurringPeriod === period)));
   };
 
+  const handleAddSavingsAccount = () => {
+    const label = savingsForm.label.trim();
+    if (!label) { setSavingsError("Dê um nome para a categoria."); return; }
+    if (savingsAccounts.some((s) => s.label.toLowerCase() === label.toLowerCase())) { setSavingsError("Já existe uma categoria de poupança com esse nome."); return; }
+    setSavingsAccounts((prev) => [...prev, { id: uid(), label, color: savingsForm.color, currentAmount: 0, history: [] }]);
+    setSavingsForm({ label: "", color: COLOR_PALETTE[0] });
+    setSavingsError("");
+  };
+
+  const handleDeleteSavingsAccount = (account) => {
+    setSavingsAccounts((prev) => prev.filter((s) => s.id !== account.id));
+  };
+
+  const handleContributeSavings = (accountId, delta) => {
+    setSavingsAccounts((prev) => prev.map((s) => (s.id === accountId ? {
+      ...s,
+      currentAmount: Math.max(0, s.currentAmount + delta),
+      history: [...(s.history || []), { id: uid(), date: todayISO(), amount: delta }],
+    } : s)));
+  };
+
+  const handleDeleteSavingsHistoryEntry = (accountId, entryId) => {
+    setSavingsAccounts((prev) => prev.map((s) => {
+      if (s.id !== accountId) return s;
+      const entry = (s.history || []).find((h) => h.id === entryId);
+      if (!entry) return s;
+      return {
+        ...s,
+        currentAmount: Math.max(0, s.currentAmount - entry.amount),
+        history: s.history.filter((h) => h.id !== entryId),
+      };
+    }));
+  };
+
   const handleAddBudget = () => {
     if (!budgetForm.categoryId) { setBudgetError("Selecione uma categoria."); return; }
     const limitNum = parseFloat(String(budgetForm.limit).replace(",", "."));
@@ -833,6 +910,18 @@ export default function App() {
             fixedBills={fixedBills}
             findBank={findBank}
             onLaunchFixedBill={handleLaunchFixedBill}
+            savingsAccounts={savingsAccounts}
+          />
+        ) : activeTab === "poupanca" ? (
+          <PoupancaTab
+            savingsAccounts={savingsAccounts}
+            savingsForm={savingsForm}
+            setSavingsForm={setSavingsForm}
+            savingsError={savingsError}
+            onAdd={handleAddSavingsAccount}
+            onDelete={handleDeleteSavingsAccount}
+            onContribute={handleContributeSavings}
+            onDeleteHistoryEntry={handleDeleteSavingsHistoryEntry}
           />
         ) : activeTab === "config" ? (
           <ConfiguracoesTab
@@ -858,7 +947,7 @@ export default function App() {
             onRestoreBanks={handleRestoreDefaultBanks}
           />
         ) : activeTab === "relatorios" ? (
-          <ReportsTab transactions={transactions} findCategory={findCategory} fixedBills={fixedBills} />
+          <ReportsTab transactions={transactions} findCategory={findCategory} fixedBills={fixedBills} savingsAccounts={savingsAccounts} />
         ) : activeTab === "orcamento" ? (
           <OrcamentoTab
             budgets={budgets}
@@ -1342,7 +1431,7 @@ function TemaSection({ theme, setTheme }) {
   );
 }
 
-function ReportsTab({ transactions, findCategory, fixedBills }) {
+function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts }) {
   const [monthsCount, setMonthsCount] = useState(6);
   const [horizonDays, setHorizonDays] = useState(90);
   const today = new Date();
@@ -1350,6 +1439,25 @@ function ReportsTab({ transactions, findCategory, fixedBills }) {
   const [customEnd, setCustomEnd] = useState(() => todayISO());
 
   const projection = useMemo(() => buildCashFlowProjection(transactions, fixedBills, horizonDays), [transactions, fixedBills, horizonDays]);
+
+  const savingsTotal = useMemo(() => savingsAccounts.reduce((s, a) => s + a.currentAmount, 0), [savingsAccounts]);
+
+  const savingsBreakdown = useMemo(
+    () => savingsAccounts.filter((a) => a.currentAmount > 0).map((a) => ({ name: a.label, value: a.currentAmount, color: a.color })).sort((a, b) => b.value - a.value),
+    [savingsAccounts]
+  );
+
+  const savingsEvolution = useMemo(() => {
+    const events = [];
+    savingsAccounts.forEach((a) => (a.history || []).forEach((h) => events.push({ date: h.date, amount: h.amount })));
+    events.sort((a, b) => (a.date < b.date ? -1 : 1));
+    let running = 0;
+    const points = events.map((e) => { running += e.amount; return { data: formatDateBR(e.date).slice(0, 5), saldo: running }; });
+    // agrupa por data para não repetir pontos do mesmo dia
+    const byDate = {};
+    points.forEach((p) => { byDate[p.data] = p.saldo; });
+    return Object.entries(byDate).map(([data, saldo]) => ({ data, saldo }));
+  }, [savingsAccounts]);
 
   const monthlyData = useMemo(() => {
     const now = new Date();
@@ -1481,6 +1589,57 @@ function ReportsTab({ transactions, findCategory, fixedBills }) {
           </LineChart>
         </ResponsiveContainer>
       </div>
+
+      {/* Savings */}
+      {savingsAccounts.length > 0 && (
+        <div className="rz-card p-4 sm:p-5 mb-6">
+          <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+            <h2 className="text-sm font-semibold">Poupança</h2>
+            <span className="rz-mono text-xs" style={{ color: "var(--emerald)" }}>Total guardado: {formatCurrency(savingsTotal)}</span>
+          </div>
+
+          {savingsBreakdown.length === 0 ? (
+            <p className="text-sm py-6 text-center" style={{ color: "var(--ink-soft)" }}>Nenhum valor guardado ainda.</p>
+          ) : (
+            <div className="grid md:grid-cols-2 gap-4">
+              <div>
+                <ResponsiveContainer width="100%" height={200}>
+                  <PieChart>
+                    <Pie data={savingsBreakdown} dataKey="value" nameKey="name" innerRadius={50} outerRadius={80} paddingAngle={2}>
+                      {savingsBreakdown.map((entry, i) => <Cell key={i} fill={entry.color} stroke="#fff" strokeWidth={2} />)}
+                    </Pie>
+                    <Tooltip formatter={(v) => formatCurrency(v)} contentStyle={{ background: "#fff", border: "1px solid var(--line)", borderRadius: 8, fontSize: 12, fontFamily: "IBM Plex Mono, monospace" }} />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="flex flex-wrap gap-x-4 gap-y-1.5 mt-2">
+                  {savingsBreakdown.map((c) => (
+                    <div key={c.name} className="flex items-center gap-1.5 text-xs">
+                      <span className="rz-dot" style={{ background: c.color }} />
+                      <span style={{ color: "var(--ink-soft)" }}>{c.name}</span>
+                      <span className="rz-mono font-semibold">{formatCurrency(c.value)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {savingsEvolution.length > 1 && (
+                <div>
+                  <p className="text-xs mb-2" style={{ color: "var(--ink-soft)" }}>Evolução acumulada</p>
+                  <ResponsiveContainer width="100%" height={200}>
+                    <LineChart data={savingsEvolution} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
+                      <CartesianGrid stroke="var(--line)" vertical={false} />
+                      <XAxis dataKey="data" tick={{ fontSize: 11, fontFamily: "IBM Plex Mono, monospace", fill: "#56685C" }} axisLine={{ stroke: "var(--line)" }} tickLine={false} />
+                      <YAxis tickFormatter={formatCompact} tick={{ fontSize: 11, fontFamily: "IBM Plex Mono, monospace", fill: "#56685C" }} axisLine={false} tickLine={false} width={48} />
+                      <Tooltip formatter={(v) => formatCurrency(v)} contentStyle={{ background: "#fff", border: "1px solid var(--line)", borderRadius: 8, fontSize: 12, fontFamily: "IBM Plex Mono, monospace" }} labelStyle={{ color: "var(--ink)", fontWeight: 600 }} />
+                      <Line type="monotone" dataKey="saldo" name="Poupança acumulada" stroke="var(--emerald)" strokeWidth={2.5} dot={{ r: 3, fill: "var(--emerald)" }} activeDot={{ r: 5 }} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Custom period report */}
       <div className="rz-card p-4 sm:p-5">
@@ -2022,11 +2181,132 @@ function FixedBillsTab({
   );
 }
 
-function VisaoGeralTab({ transactions, periodFiltered, totals, refDate, periodMode, shiftMonth, setPeriodMode, findCategory, setActiveTab, fixedBills, findBank, onLaunchFixedBill }) {
+function PoupancaTab({ savingsAccounts, savingsForm, setSavingsForm, savingsError, onAdd, onDelete, onContribute, onDeleteHistoryEntry }) {
+  const total = savingsAccounts.reduce((s, a) => s + a.currentAmount, 0);
+
+  return (
+    <div>
+      <header className="mb-6 flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="rz-display text-2xl md:text-3xl">Poupança</h1>
+          <p className="text-sm mt-1" style={{ color: "var(--ink-soft)" }}>Quanto você já tem guardado, por categoria.</p>
+        </div>
+      </header>
+
+      <div className="mb-6">
+        <SummaryCard label="Total guardado" value={total} icon={Landmark} tone="emerald" />
+      </div>
+
+      <div className="rz-card p-5 mb-6">
+        <h2 className="text-sm font-semibold mb-3">Nova categoria de poupança</h2>
+        <div className="flex flex-col sm:flex-row gap-3 mb-3">
+          <input
+            className="rz-input rz-focus flex-1"
+            placeholder="Ex: Reserva de Emergência, Casa Nova…"
+            value={savingsForm.label}
+            onChange={(e) => setSavingsForm({ ...savingsForm, label: e.target.value })}
+            onKeyDown={(e) => e.key === "Enter" && onAdd()}
+          />
+          <button onClick={onAdd} className="rz-btn-primary rz-focus flex items-center justify-center gap-2 text-sm whitespace-nowrap">
+            <Plus size={16} /> Adicionar
+          </button>
+        </div>
+        <div className="flex flex-wrap gap-2 mb-1">
+          {COLOR_PALETTE.map((color) => (
+            <button
+              key={color}
+              onClick={() => setSavingsForm({ ...savingsForm, color })}
+              className="rz-focus w-6 h-6 rounded-full"
+              style={{ background: color, boxShadow: savingsForm.color === color ? "0 0 0 2px #fff, 0 0 0 4px var(--ink)" : "none" }}
+              aria-label={`Cor ${color}`}
+            />
+          ))}
+        </div>
+        {savingsError && <div className="text-xs mt-2" style={{ color: "var(--brick)" }}>{savingsError}</div>}
+      </div>
+
+      {savingsAccounts.length === 0 ? (
+        <div className="rz-card p-10 text-center">
+          <Landmark size={26} className="mx-auto mb-3" style={{ color: "var(--line)" }} />
+          <div className="rz-display text-lg mb-1">Nenhuma categoria de poupança</div>
+          <p className="text-sm" style={{ color: "var(--ink-soft)" }}>Crie uma categoria acima pra começar a guardar dinheiro.</p>
+        </div>
+      ) : (
+        <div className="grid sm:grid-cols-2 gap-4">
+          {savingsAccounts.map((a) => (
+            <SavingsCard key={a.id} account={a} onDelete={onDelete} onContribute={onContribute} onDeleteHistoryEntry={onDeleteHistoryEntry} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SavingsCard({ account, onDelete, onContribute, onDeleteHistoryEntry }) {
+  const [amount, setAmount] = useState("");
+  const [showHistory, setShowHistory] = useState(false);
+  const history = account.history || [];
+
+  const submitDelta = (sign) => {
+    const num = parseFloat(String(amount).replace(",", "."));
+    if (!num || num <= 0) return;
+    onContribute(account.id, num * sign);
+    setAmount("");
+  };
+
+  return (
+    <div className="rz-card p-4 sm:p-5">
+      <div className="flex items-start justify-between mb-3 gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="rz-dot" style={{ background: account.color }} />
+          <span className="text-sm font-medium truncate">{account.label}</span>
+        </div>
+        <button onClick={() => onDelete(account)} className="rz-focus p-1 rounded-md shrink-0" aria-label="Excluir categoria" style={{ color: "var(--ink-soft)" }}>
+          <Trash2 size={13} />
+        </button>
+      </div>
+
+      <div className="rz-mono text-2xl font-semibold mb-4" style={{ color: "var(--emerald)" }}>{formatCurrency(account.currentAmount)}</div>
+
+      <div className="flex items-center gap-2">
+        <input className="rz-input rz-focus rz-mono text-sm flex-1" inputMode="decimal" placeholder="Valor" value={amount} onChange={(e) => setAmount(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submitDelta(1)} />
+        <button onClick={() => submitDelta(1)} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--emerald)" }} aria-label="Adicionar valor"><Plus size={16} /></button>
+        <button onClick={() => submitDelta(-1)} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--brick)" }} aria-label="Retirar valor"><Minus size={16} /></button>
+      </div>
+
+      {history.length > 0 && (
+        <div className="mt-3 pt-3" style={{ borderTop: "1px solid var(--line)" }}>
+          <button onClick={() => setShowHistory((v) => !v)} className="rz-focus text-xs font-medium flex items-center gap-1" style={{ color: "var(--ink-soft)" }}>
+            <History size={13} /> {showHistory ? "Ocultar" : "Ver"} histórico ({history.length})
+          </button>
+          {showHistory && (
+            <div className="flex flex-col mt-2 max-h-40 overflow-y-auto">
+              {[...history].reverse().map((h) => (
+                <div key={h.id} className="flex items-center gap-2 py-1.5" style={{ borderTop: "1px solid var(--line)" }}>
+                  <span className="rz-mono text-[11px] flex-1" style={{ color: "var(--ink-soft)" }}>{formatDateBR(h.date)}</span>
+                  <span className="rz-mono text-xs font-semibold" style={{ color: h.amount >= 0 ? "var(--emerald)" : "var(--brick)" }}>
+                    {h.amount >= 0 ? "+ " : "− "}{formatCurrency(Math.abs(h.amount))}
+                  </span>
+                  <button onClick={() => onDeleteHistoryEntry(account.id, h.id)} className="rz-focus p-1 rounded-md" aria-label="Excluir movimentação" style={{ color: "var(--ink-soft)" }}>
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VisaoGeralTab({ transactions, periodFiltered, totals, refDate, periodMode, shiftMonth, setPeriodMode, findCategory, setActiveTab, fixedBills, findBank, onLaunchFixedBill, savingsAccounts }) {
   const saldoTotal = useMemo(
     () => transactions.filter((t) => t.status === "pago").reduce((s, t) => s + (t.type === "receita" ? t.amount : -t.amount), 0),
     [transactions]
   );
+
+  const savingsTotal = useMemo(() => savingsAccounts.reduce((s, a) => s + a.currentAmount, 0), [savingsAccounts]);
 
   const pendingFixedBills = useMemo(() => {
     return enrichFixedBills(fixedBills, transactions, refDate)
@@ -2088,11 +2368,12 @@ function VisaoGeralTab({ transactions, periodFiltered, totals, refDate, periodMo
           <PeriodNavigator periodMode={periodMode} refDate={refDate} shiftMonth={shiftMonth} setPeriodMode={setPeriodMode} />
 
           {/* Summary cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-6">
             <SummaryCard label="Saldo total" value={saldoTotal} icon={Scale} tone={saldoTotal >= 0 ? "emerald" : "brick"} />
             <SummaryCard label="Receitas do período" value={totals.receitas} icon={TrendingUp} tone="emerald" />
             <SummaryCard label="Despesas do período" value={totals.despesas} icon={TrendingDown} tone="brick" />
             <SummaryCard label="Saldo projetado" value={totals.saldo} icon={Scale} tone={totals.saldo >= 0 ? "emerald" : "brick"} />
+            <SummaryCard label="Total em poupança" value={savingsTotal} icon={Landmark} tone="emerald" />
           </div>
 
           {/* Balance trend */}
@@ -2108,6 +2389,25 @@ function VisaoGeralTab({ transactions, periodFiltered, totals, refDate, periodMo
               </LineChart>
             </ResponsiveContainer>
           </div>
+
+          {/* Savings breakdown */}
+          {savingsAccounts.length > 0 && (
+            <div className="rz-card p-4 sm:p-5 mb-4">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-sm font-semibold">Poupança por categoria</h2>
+                <span className="rz-mono text-xs" style={{ color: "var(--emerald)" }}>Total: {formatCurrency(savingsTotal)}</span>
+              </div>
+              <div className="flex flex-wrap gap-x-5 gap-y-2">
+                {savingsAccounts.map((a) => (
+                  <div key={a.id} className="flex items-center gap-1.5 text-xs">
+                    <span className="rz-dot" style={{ background: a.color }} />
+                    <span style={{ color: "var(--ink-soft)" }}>{a.label}</span>
+                    <span className="rz-mono font-semibold">{formatCurrency(a.currentAmount)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Pending fixed bills */}
           {pendingFixedBills.length > 0 && (
