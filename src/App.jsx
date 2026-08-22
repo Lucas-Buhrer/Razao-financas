@@ -1305,6 +1305,7 @@ function ConfiguracoesTab({
     { id: "tema", label: "Tema" },
     { id: "categorias", label: "Categorias" },
     { id: "contas", label: "Contas e Cartões" },
+    { id: "conta-usuario", label: "Conta" },
   ];
 
   return (
@@ -1358,6 +1359,70 @@ function ConfiguracoesTab({
           onRestore={onRestoreBanks}
         />
       )}
+
+      {subTab === "conta-usuario" && <ContaSection />}
+    </div>
+  );
+}
+
+function ContaSection() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState(false);
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => setEmail(data?.user?.email || ""));
+  }, []);
+
+  const handleChangePassword = async () => {
+    setError(""); setSuccess(false);
+    if (password.length < 6) { setError("A nova senha precisa ter pelo menos 6 caracteres."); return; }
+    if (password !== confirm) { setError("As senhas não coincidem."); return; }
+
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password });
+      if (error) throw error;
+      setSuccess(true);
+      setPassword(""); setConfirm("");
+    } catch (err) {
+      setError(err.message || "Não foi possível alterar a senha.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="max-w-xl mx-auto">
+      <div className="rz-card p-5 mb-6">
+        <h2 className="text-sm font-semibold mb-1">Sua conta</h2>
+        <p className="text-xs mb-4" style={{ color: "var(--ink-soft)" }}>{email}</p>
+        <button onClick={() => supabase.auth.signOut()} className="rz-btn-ghost rz-focus text-xs !py-1.5 !px-3">
+          Sair da conta
+        </button>
+      </div>
+
+      <div className="rz-card p-5">
+        <h2 className="text-sm font-semibold mb-4">Alterar senha</h2>
+        <div className="flex flex-col gap-3">
+          <div>
+            <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Nova senha</label>
+            <input type="password" autoComplete="new-password" className="rz-input rz-focus" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} />
+          </div>
+          <div>
+            <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Confirmar nova senha</label>
+            <input type="password" autoComplete="new-password" className="rz-input rz-focus" placeholder="••••••••" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+          </div>
+          {error && <div className="text-xs" style={{ color: "var(--brick)" }}>{error}</div>}
+          {success && <div className="text-xs" style={{ color: "var(--emerald)" }}>Senha alterada com sucesso.</div>}
+          <button onClick={handleChangePassword} disabled={loading} className="rz-btn-primary rz-focus text-sm mt-1 disabled:opacity-60">
+            {loading ? "Salvando…" : "Salvar nova senha"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
