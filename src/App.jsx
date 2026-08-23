@@ -744,6 +744,10 @@ export default function App() {
     resetForm();
   };
 
+  const handleTogglePaid = (t) => {
+    setTransactions((prev) => prev.map((x) => (x.id === t.id ? { ...x, status: x.status === "pago" ? "pendente" : "pago" } : x)));
+  };
+
   const handleDelete = (t) => {
     setTransactions((prev) => prev.filter((x) => x.id !== t.id));
     setToast({ message: `Lançamento "${t.description}" excluído.`, item: t });
@@ -1309,24 +1313,31 @@ export default function App() {
                       </div>
                       <div className="rz-mono text-xs w-20 shrink-0" style={{ color: "var(--ink-soft)" }}>{formatDateBR(t.date)}</div>
                       <div className="w-24 shrink-0 flex justify-start">
-                        <span className={`rz-stamp ${t.status === "pago" ? "rz-stamp-pago" : "rz-stamp-pendente"}`}>
+                        <button
+                          onClick={() => handleTogglePaid(t)}
+                          className={`rz-stamp rz-focus ${t.status === "pago" ? "rz-stamp-pago" : "rz-stamp-pendente"}`}
+                          style={{ cursor: "pointer" }}
+                          title={t.status === "pago" ? "Clique para marcar como pendente" : "Clique para marcar como pago"}
+                        >
                           {t.status === "pago" ? "Pago" : "Pendente"}
-                        </span>
+                        </button>
                       </div>
                       <div className="rz-mono text-sm font-semibold w-28 text-right shrink-0" style={{ color: t.type === "receita" ? "var(--emerald)" : "var(--brick)" }}>
                         {t.type === "receita" ? "+ " : "− "}{formatCurrency(t.amount)}
                       </div>
-                      {t.attachmentPath && (
-                        <button
-                          onClick={() => handleOpenAttachment(t.attachmentPath)}
-                          className="rz-focus p-1 rounded-md shrink-0"
-                          aria-label="Ver comprovante"
-                          title={t.attachmentName || "Ver comprovante"}
-                          style={{ color: "var(--ink-soft)" }}
-                        >
-                          <Paperclip size={14} />
-                        </button>
-                      )}
+                      <div className="w-6 shrink-0 flex justify-center">
+                        {t.attachmentPath && (
+                          <button
+                            onClick={() => handleOpenAttachment(t.attachmentPath)}
+                            className="rz-focus p-1 rounded-md"
+                            aria-label="Ver comprovante"
+                            title={t.attachmentName || "Ver comprovante"}
+                            style={{ color: "var(--ink-soft)" }}
+                          >
+                            <Paperclip size={14} />
+                          </button>
+                        )}
+                      </div>
                       {householdMemberCount > 1 && (
                         <span
                           title={t.createdBy || "Desconhecido"}

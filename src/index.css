@@ -63,7 +63,9 @@
           font-family: 'IBM Plex Mono', monospace; letter-spacing: .04em; text-transform: uppercase;
           font-size: 0.6rem; padding: 3px 8px; font-weight: 600; white-space: nowrap;
           display: inline-flex; align-items: center; justify-content: center;
+          transition: transform .1s, filter .1s;
         }
+        button.rz-stamp:hover { filter: brightness(0.92); transform: scale(1.04); }
         .rz-stamp-pago { color: var(--emerald); border-color: var(--emerald); background: var(--emerald-soft); }
         .rz-stamp-pendente { color: var(--gold); border-color: var(--gold); background: var(--gold-soft); }
         .rz-stamp-atrasada { color: var(--brick); border-color: var(--brick); background: var(--brick-soft); }
