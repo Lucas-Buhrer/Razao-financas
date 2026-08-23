@@ -1,9 +1,10 @@
 import { useState, useEffect, useMemo, useRef } from "react";
+import Papa from "papaparse";
 import {
   BookOpen, Home, Receipt, Repeat, Target, BarChart3, Landmark,
   Plus, Trash2, Pencil, X, Check, Search, ChevronLeft, ChevronRight,
   TrendingUp, TrendingDown, Scale, Undo2, Menu, AlertCircle, PauseCircle, PlayCircle,
-  PiggyBank, Minus, PartyPopper, History, Settings, RotateCcw, LogOut,
+  PiggyBank, Minus, PartyPopper, History, Settings, RotateCcw, LogOut, FileUp,
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -77,6 +78,62 @@ const emptyForm = { description: "", amount: "", date: todayISO(), type: "despes
 
 function dateToISO(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function detectColumn(headers, candidates) {
+  const lower = headers.map((h) => h.toLowerCase().trim());
+  for (const cand of candidates) {
+    const idx = lower.indexOf(cand);
+    if (idx !== -1) return headers[idx];
+  }
+  return null;
+}
+
+function parseBRNumber(str) {
+  if (typeof str === "number") return str;
+  if (!str) return NaN;
+  let s = String(str).trim().replace(/[^\d,.\-]/g, "");
+  if (s.includes(",") && s.includes(".")) s = s.replace(/\./g, "").replace(",", ".");
+  else if (s.includes(",")) s = s.replace(",", ".");
+  return parseFloat(s);
+}
+
+function parseCsvDate(str) {
+  if (!str) return null;
+  const s = String(str).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+  if (m) {
+    let [, d, mo, y] = m;
+    if (y.length === 2) y = "20" + y;
+    return `${y}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}`;
+  }
+  return null;
+}
+
+function parseImportedCsv(rawRows) {
+  if (!rawRows.length) return { rows: [], error: "O arquivo está vazio." };
+  const headers = Object.keys(rawRows[0]);
+  const dateCol = detectColumn(headers, ["data", "date", "dt"]);
+  const descCol = detectColumn(headers, ["descricao", "descrição", "description", "histórico", "historico", "memo"]);
+  const amountCol = detectColumn(headers, ["valor", "amount", "value"]);
+  if (!dateCol || !descCol || !amountCol) {
+    return { rows: [], error: 'Não conseguimos identificar as colunas de data, descrição e valor. Verifique se o CSV tem cabeçalhos como "Data", "Descrição" e "Valor".' };
+  }
+  const rows = rawRows
+    .map((r) => {
+      const date = parseCsvDate(r[dateCol]);
+      const amountRaw = parseBRNumber(r[amountCol]);
+      const description = (r[descCol] || "").trim();
+      return {
+        date, description,
+        amount: Math.abs(amountRaw),
+        type: amountRaw < 0 ? "despesa" : "receita",
+        valid: !!date && !!description && !isNaN(amountRaw) && amountRaw !== 0,
+      };
+    })
+    .filter((r) => r.description || r.date);
+  return { rows, error: null };
 }
 
 function addMonthsToDateISO(dateISO, months) {
@@ -223,6 +280,9 @@ export default function App() {
   const [savingsLoaded, setSavingsLoaded] = useState(false);
   const [savingsForm, setSavingsForm] = useState({ label: "", color: COLOR_PALETTE[0] });
   const [savingsError, setSavingsError] = useState("");
+
+  const [backupMessage, setBackupMessage] = useState(null);
+  const [showCsvImport, setShowCsvImport] = useState(false);
 
   const [budgets, setBudgets] = useState([]);
   const [budgetsLoaded, setBudgetsLoaded] = useState(false);
@@ -569,6 +629,21 @@ export default function App() {
     setForm((f) => ({ ...f, type, category: "", installments: type === "despesa" ? f.installments : false }));
   };
 
+  const checkBudgetAlert = (categoryId, type, date, addedAmount) => {
+    if (type !== "despesa") return;
+    const budget = budgets.find((b) => b.categoryId === categoryId);
+    if (!budget) return;
+    const d = new Date(date + "T00:00:00");
+    const monthTotal = transactions
+      .filter((t) => t.type === "despesa" && t.category === categoryId)
+      .filter((t) => { const td = new Date(t.date + "T00:00:00"); return td.getFullYear() === d.getFullYear() && td.getMonth() === d.getMonth(); })
+      .reduce((s, t) => s + Number(t.amount), 0) + addedAmount;
+    if (monthTotal > budget.limit) {
+      const cat = findCategory("despesa", categoryId);
+      setToast({ message: `Orçamento de "${cat.label}" estourado: ${formatCurrency(monthTotal)} de ${formatCurrency(budget.limit)}.`, tone: "warning" });
+    }
+  };
+
   const handleSubmit = () => {
     const amountNum = parseFloat(String(form.amount).replace(",", "."));
     if (!form.description.trim()) { setFormError("Dê uma descrição para o lançamento."); return; }
@@ -595,6 +670,7 @@ export default function App() {
         });
       }
       setTransactions((prev) => [...prev, ...newTxs]);
+      checkBudgetAlert(form.category, form.type, newTxs[0].date, newTxs[0].amount);
       setShowForm(false);
       resetForm();
       return;
@@ -604,6 +680,7 @@ export default function App() {
       setTransactions((prev) => prev.map((t) => (t.id === editingId ? { ...t, ...form, amount: amountNum } : t)));
     } else {
       setTransactions((prev) => [...prev, { id: uid(), ...form, amount: amountNum }]);
+      checkBudgetAlert(form.category, form.type, form.date, amountNum);
     }
     setShowForm(false);
     resetForm();
@@ -776,6 +853,69 @@ export default function App() {
     }));
   };
 
+  const handleExportBackup = () => {
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      data: {
+        lancamentos: transactions,
+        categorias_personalizadas: customCategories,
+        categorias_padrao_ocultas: hiddenDefaultCategories,
+        bancos_personalizados: customBanks,
+        bancos_padrao_ocultos: hiddenDefaultBanks,
+        contas_fixas: fixedBills,
+        orcamentos: budgets,
+        metas: goals,
+        poupanca: savingsAccounts,
+        tema_cores: theme,
+      },
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `razao-backup-${todayISO()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImportBackup = (file) => {
+    if (!window.confirm("Isso vai substituir TODOS os seus dados atuais pelos do backup. Deseja continuar?")) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const parsed = JSON.parse(e.target.result);
+        const d = parsed.data || parsed;
+        if (d.lancamentos) setTransactions(d.lancamentos);
+        if (d.categorias_personalizadas) setCustomCategories(d.categorias_personalizadas);
+        if (d.categorias_padrao_ocultas) setHiddenDefaultCategories(d.categorias_padrao_ocultas);
+        if (d.bancos_personalizados) setCustomBanks(d.bancos_personalizados);
+        if (d.bancos_padrao_ocultos) setHiddenDefaultBanks(d.bancos_padrao_ocultos);
+        if (d.contas_fixas) setFixedBills(d.contas_fixas);
+        if (d.orcamentos) setBudgets(d.orcamentos);
+        if (d.metas) setGoals(d.metas);
+        if (d.poupanca) setSavingsAccounts(d.poupanca);
+        if (d.tema_cores) setTheme(d.tema_cores);
+        setBackupMessage({ type: "success", text: "Backup importado com sucesso!" });
+      } catch (err) {
+        setBackupMessage({ type: "error", text: "Arquivo inválido. Verifique se é um backup do Razão (.json)." });
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleConfirmCsvImport = (rows, despesaCategory, receitaCategory, account) => {
+    const newTxs = rows.map((r) => ({
+      id: uid(), description: r.description, amount: r.amount, date: r.date, type: r.type,
+      category: r.type === "despesa" ? despesaCategory : receitaCategory,
+      account, status: "pendente",
+    }));
+    setTransactions((prev) => [...prev, ...newTxs]);
+    setShowCsvImport(false);
+    setToast({ message: `${newTxs.length} lançamento${newTxs.length !== 1 ? "s" : ""} importado${newTxs.length !== 1 ? "s" : ""} com sucesso.` });
+  };
+
   const handleAddBudget = () => {
     if (!budgetForm.categoryId) { setBudgetError("Selecione uma categoria."); return; }
     const limitNum = parseFloat(String(budgetForm.limit).replace(",", "."));
@@ -945,6 +1085,9 @@ export default function App() {
             onDeleteBank={handleDeleteBank}
             hiddenBanksCount={hiddenDefaultBanks.length}
             onRestoreBanks={handleRestoreDefaultBanks}
+            onExportBackup={handleExportBackup}
+            onImportBackup={handleImportBackup}
+            backupMessage={backupMessage}
           />
         ) : activeTab === "relatorios" ? (
           <ReportsTab transactions={transactions} findCategory={findCategory} fixedBills={fixedBills} savingsAccounts={savingsAccounts} />
@@ -1055,10 +1198,22 @@ export default function App() {
                   <option key={c.id} value={c.id}>{c.label}</option>
                 ))}
               </select>
+              <button onClick={() => setShowCsvImport(true)} className="rz-btn-ghost rz-focus flex items-center justify-center gap-2 text-sm whitespace-nowrap">
+                <FileUp size={16} /> Importar CSV
+              </button>
               <button onClick={openNewForm} className="rz-btn-primary rz-focus flex items-center justify-center gap-2 text-sm whitespace-nowrap">
                 <Plus size={16} /> Novo lançamento
               </button>
             </div>
+
+            {showCsvImport && (
+              <CsvImportModal
+                categoriesByType={categoriesByType}
+                banksList={banksList}
+                onConfirm={handleConfirmCsvImport}
+                onCancel={() => setShowCsvImport(false)}
+              />
+            )}
 
             {/* Transaction list */}
             {visibleTransactions.length === 0 ? (
@@ -1233,11 +1388,13 @@ export default function App() {
       {/* ---------------- Toast ---------------- */}
       {toast && (
         <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50">
-          <div className="flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg" style={{ background: "var(--ink)", color: "#EEF1E7" }}>
+          <div className="flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg max-w-[90vw]" style={{ background: toast.tone === "warning" ? "var(--brick)" : "var(--ink)", color: "#EEF1E7" }}>
             <span className="text-sm">{toast.message}</span>
-            <button onClick={handleUndo} className="rz-focus flex items-center gap-1 text-sm font-semibold" style={{ color: "#8FE0C4" }}>
-              <Undo2 size={14} /> Desfazer
-            </button>
+            {toast.item && (
+              <button onClick={handleUndo} className="rz-focus flex items-center gap-1 text-sm font-semibold shrink-0" style={{ color: "#8FE0C4" }}>
+                <Undo2 size={14} /> Desfazer
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -1299,12 +1456,14 @@ function ConfiguracoesTab({
   onAddCategory, onDeleteCategory, hiddenCategoriesCount, onRestoreCategories,
   banksList, customBanks, bankForm, setBankForm, bankError,
   onAddBank, onDeleteBank, hiddenBanksCount, onRestoreBanks,
+  onExportBackup, onImportBackup, backupMessage,
 }) {
   const [subTab, setSubTab] = useState("tema");
   const SUB_TABS = [
     { id: "tema", label: "Tema" },
     { id: "categorias", label: "Categorias" },
     { id: "contas", label: "Contas e Cartões" },
+    { id: "backup", label: "Backup" },
     { id: "conta-usuario", label: "Conta" },
   ];
 
@@ -1360,7 +1519,51 @@ function ConfiguracoesTab({
         />
       )}
 
+      {subTab === "backup" && (
+        <BackupSection onExport={onExportBackup} onImport={onImportBackup} message={backupMessage} />
+      )}
+
       {subTab === "conta-usuario" && <ContaSection />}
+    </div>
+  );
+}
+
+function BackupSection({ onExport, onImport, message }) {
+  const fileInputRef = useRef(null);
+
+  return (
+    <div className="max-w-xl mx-auto">
+      <div className="rz-card p-5 mb-6">
+        <h2 className="text-sm font-semibold mb-1">Baixar backup</h2>
+        <p className="text-xs mb-4" style={{ color: "var(--ink-soft)" }}>
+          Baixa um arquivo com todos os seus dados: lançamentos, categorias, contas fixas, orçamento, metas e poupança.
+        </p>
+        <button onClick={onExport} className="rz-btn-primary rz-focus text-sm inline-flex items-center gap-2">
+          Baixar backup (.json)
+        </button>
+      </div>
+
+      <div className="rz-card p-5">
+        <h2 className="text-sm font-semibold mb-1">Restaurar backup</h2>
+        <p className="text-xs mb-4" style={{ color: "var(--ink-soft)" }}>
+          Selecione um arquivo de backup exportado anteriormente. <strong>Isso substitui todos os dados atuais.</strong>
+        </p>
+        <input
+          type="file"
+          accept=".json,application/json"
+          ref={fileInputRef}
+          className="hidden"
+          onChange={(e) => { if (e.target.files[0]) onImport(e.target.files[0]); e.target.value = ""; }}
+        />
+        <button onClick={() => fileInputRef.current?.click()} className="rz-btn-ghost rz-focus text-sm">
+          Selecionar arquivo de backup
+        </button>
+        {message && (
+          <div className="text-xs mt-3" style={{ color: message.type === "success" ? "var(--emerald)" : "var(--brick)" }}>
+            {message.text}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -2242,6 +2445,123 @@ function FixedBillsTab({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function CsvImportModal({ categoriesByType, banksList, onConfirm, onCancel }) {
+  const [rows, setRows] = useState([]);
+  const [error, setError] = useState("");
+  const [fileName, setFileName] = useState("");
+  const [despesaCategory, setDespesaCategory] = useState("");
+  const [receitaCategory, setReceitaCategory] = useState("");
+  const [account, setAccount] = useState("");
+
+  const handleFile = (file) => {
+    setFileName(file.name);
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (results) => {
+        const { rows: parsedRows, error: parseErr } = parseImportedCsv(results.data);
+        if (parseErr) { setError(parseErr); setRows([]); return; }
+        setError("");
+        setRows(parsedRows);
+      },
+      error: () => setError("Não foi possível ler o arquivo."),
+    });
+  };
+
+  const validRows = rows.filter((r) => r.valid);
+  const invalidCount = rows.length - validRows.length;
+  const hasDespesas = validRows.some((r) => r.type === "despesa");
+  const hasReceitas = validRows.some((r) => r.type === "receita");
+
+  const handleConfirm = () => {
+    if (hasDespesas && !despesaCategory) { setError("Selecione uma categoria para as despesas importadas."); return; }
+    if (hasReceitas && !receitaCategory) { setError("Selecione uma categoria para as receitas importadas."); return; }
+    onConfirm(validRows, despesaCategory, receitaCategory, account);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-6" style={{ background: "rgba(30,43,35,0.45)" }}>
+      <div className="rz-card w-full sm:max-w-lg p-5 sm:p-6" style={{ borderRadius: "14px 14px 0 0", maxHeight: "90vh", overflowY: "auto" }}>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="rz-display text-xl">Importar extrato (CSV)</h2>
+          <button onClick={onCancel} className="rz-focus" style={{ color: "var(--ink-soft)" }} aria-label="Fechar"><X size={20} /></button>
+        </div>
+
+        {rows.length === 0 ? (
+          <>
+            <p className="text-sm mb-4" style={{ color: "var(--ink-soft)" }}>
+              Selecione um arquivo CSV com colunas de data, descrição e valor — o extrato do seu banco geralmente já vem assim. Valores negativos viram despesa, positivos viram receita.
+            </p>
+            <input type="file" accept=".csv,text/csv" onChange={(e) => e.target.files[0] && handleFile(e.target.files[0])} className="text-sm" />
+            {error && <div className="text-xs mt-3" style={{ color: "var(--brick)" }}>{error}</div>}
+          </>
+        ) : (
+          <>
+            <p className="text-xs mb-3" style={{ color: "var(--ink-soft)" }}>
+              {fileName} — {validRows.length} lançamento{validRows.length !== 1 ? "s" : ""} prontos para importar
+              {invalidCount > 0 ? `, ${invalidCount} ignorado${invalidCount !== 1 ? "s" : ""} (dados incompletos)` : ""}.
+            </p>
+
+            <div className="flex flex-col gap-3 mb-4">
+              {hasDespesas && (
+                <div>
+                  <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Categoria para despesas</label>
+                  <select className="rz-input rz-focus" value={despesaCategory} onChange={(e) => setDespesaCategory(e.target.value)}>
+                    <option value="" disabled>Selecione</option>
+                    {categoriesByType.despesa.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+                  </select>
+                </div>
+              )}
+              {hasReceitas && (
+                <div>
+                  <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Categoria para receitas</label>
+                  <select className="rz-input rz-focus" value={receitaCategory} onChange={(e) => setReceitaCategory(e.target.value)}>
+                    <option value="" disabled>Selecione</option>
+                    {categoriesByType.receita.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+                  </select>
+                </div>
+              )}
+              <div>
+                <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Banco / Conta (opcional, aplicado a todos)</label>
+                <select className="rz-input rz-focus" value={account} onChange={(e) => setAccount(e.target.value)}>
+                  <option value="">Nenhum selecionado</option>
+                  {banksList.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
+                </select>
+              </div>
+            </div>
+
+            <div className="rz-card overflow-hidden mb-4" style={{ maxHeight: 220, overflowY: "auto" }}>
+              {validRows.slice(0, 50).map((r, i) => (
+                <div key={i} className="flex items-center gap-3 px-3 py-2 text-xs" style={{ borderTop: i === 0 ? "none" : "1px solid var(--line)" }}>
+                  <span className="rz-mono w-20 shrink-0" style={{ color: "var(--ink-soft)" }}>{formatDateBR(r.date)}</span>
+                  <span className="flex-1 truncate">{r.description}</span>
+                  <span className="rz-mono font-semibold shrink-0" style={{ color: r.type === "receita" ? "var(--emerald)" : "var(--brick)" }}>
+                    {r.type === "receita" ? "+ " : "− "}{formatCurrency(r.amount)}
+                  </span>
+                </div>
+              ))}
+              {validRows.length > 50 && (
+                <div className="px-3 py-2 text-xs text-center" style={{ color: "var(--ink-soft)", borderTop: "1px solid var(--line)" }}>
+                  + {validRows.length - 50} lançamentos não exibidos na prévia
+                </div>
+              )}
+            </div>
+
+            {error && <div className="text-xs mb-3" style={{ color: "var(--brick)" }}>{error}</div>}
+
+            <div className="flex gap-2">
+              <button onClick={onCancel} className="rz-btn-ghost rz-focus flex-1 text-sm">Cancelar</button>
+              <button onClick={handleConfirm} className="rz-btn-primary rz-focus flex-1 text-sm flex items-center justify-center gap-2">
+                <Check size={16} /> Importar {validRows.length} lançamento{validRows.length !== 1 ? "s" : ""}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
