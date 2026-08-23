@@ -4,7 +4,7 @@ import {
   BookOpen, Home, Receipt, Repeat, Target, BarChart3, Landmark,
   Plus, Trash2, Pencil, X, Check, Search, ChevronLeft, ChevronRight,
   TrendingUp, TrendingDown, Scale, Undo2, Menu, AlertCircle, PauseCircle, PlayCircle,
-  PiggyBank, Minus, PartyPopper, History, Settings, RotateCcw, LogOut, FileUp, Users, Copy,
+  PiggyBank, Minus, PartyPopper, History, Settings, RotateCcw, LogOut, FileUp, Users, Copy, Paperclip, Loader2,
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -12,6 +12,7 @@ import {
 } from "recharts";
 import { storage, resetStorageCache } from "./storage";
 import { supabase } from "./supabaseClient";
+import { uploadReceipt, getReceiptUrl, deleteReceipt } from "./receipts";
 
 /* ---------------------------------------------------------
    RAZÃO — Controle Financeiro Pessoal
@@ -74,7 +75,7 @@ const todayISO = () => new Date().toISOString().slice(0, 10);
 const formatCurrency = (v) => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(Number(v) || 0);
 const formatDateBR = (iso) => { const [y,m,d] = iso.split("-"); return `${d}/${m}/${y}`; };
 
-const emptyForm = { description: "", amount: "", date: todayISO(), type: "despesa", category: "", account: "", status: "pago", installments: false, installmentCount: "2" };
+const emptyForm = { description: "", amount: "", date: todayISO(), type: "despesa", category: "", account: "", status: "pago", installments: false, installmentCount: "2", attachmentPath: null, attachmentName: "" };
 
 function dateToISO(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -316,6 +317,8 @@ export default function App() {
   const [form, setForm] = useState(emptyForm);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
+  const [pendingId, setPendingId] = useState(null);
+  const [uploadingAttachment, setUploadingAttachment] = useState(false);
   const [formError, setFormError] = useState("");
 
   const [search, setSearch] = useState("");
@@ -634,16 +637,51 @@ export default function App() {
   // ---------- Handlers ----------
   const resetForm = () => { setForm(emptyForm); setEditingId(null); setFormError(""); };
 
-  const openNewForm = () => { resetForm(); setShowForm(true); };
+  const openNewForm = () => { resetForm(); setPendingId(uid()); setShowForm(true); };
 
   const openEditForm = (t) => {
-    setForm({ description: t.description, amount: String(t.amount), date: t.date, type: t.type, category: t.category, account: t.account || "", status: t.status });
+    setForm({
+      description: t.description, amount: String(t.amount), date: t.date, type: t.type,
+      category: t.category, account: t.account || "", status: t.status,
+      installments: false, installmentCount: "2",
+      attachmentPath: t.attachmentPath || null, attachmentName: t.attachmentName || "",
+    });
     setEditingId(t.id);
     setShowForm(true);
   };
 
   const handleTypeChange = (type) => {
     setForm((f) => ({ ...f, type, category: "", installments: type === "despesa" ? f.installments : false }));
+  };
+
+  const handleAttachmentSelected = async (file) => {
+    if (!file) return;
+    setUploadingAttachment(true);
+    setFormError("");
+    try {
+      const path = await uploadReceipt(file, editingId || pendingId);
+      setForm((f) => ({ ...f, attachmentPath: path, attachmentName: file.name }));
+    } catch (err) {
+      setFormError("Não foi possível enviar o arquivo. Tente novamente.");
+    } finally {
+      setUploadingAttachment(false);
+    }
+  };
+
+  const handleRemoveAttachment = async () => {
+    if (form.attachmentPath) {
+      try { await deleteReceipt(form.attachmentPath); } catch (err) { /* ignora falha ao limpar */ }
+    }
+    setForm((f) => ({ ...f, attachmentPath: null, attachmentName: "" }));
+  };
+
+  const handleOpenAttachment = async (path) => {
+    try {
+      const url = await getReceiptUrl(path);
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      setToast({ message: "Não foi possível abrir o comprovante.", tone: "warning" });
+    }
   };
 
   const checkBudgetAlert = (categoryId, type, date, addedAmount) => {
@@ -677,7 +715,7 @@ export default function App() {
       const newTxs = [];
       for (let i = 0; i < count; i++) {
         newTxs.push({
-          id: uid(),
+          id: i === 0 ? (pendingId || uid()) : uid(),
           description: `${form.description} (${i + 1}/${count})`,
           amount: i === count - 1 ? lastAmount : perInstallment,
           date: addMonthsToDateISO(form.date, i),
@@ -685,6 +723,8 @@ export default function App() {
           status: i === 0 ? form.status : "pendente",
           installmentGroupId: groupId, installmentIndex: i + 1, installmentTotal: count,
           createdBy: currentUserEmail,
+          attachmentPath: i === 0 ? form.attachmentPath : null,
+          attachmentName: i === 0 ? form.attachmentName : "",
         });
       }
       setTransactions((prev) => [...prev, ...newTxs]);
@@ -697,7 +737,7 @@ export default function App() {
     if (editingId) {
       setTransactions((prev) => prev.map((t) => (t.id === editingId ? { ...t, ...form, amount: amountNum } : t)));
     } else {
-      setTransactions((prev) => [...prev, { id: uid(), ...form, amount: amountNum, createdBy: currentUserEmail }]);
+      setTransactions((prev) => [...prev, { id: pendingId || uid(), ...form, amount: amountNum, createdBy: currentUserEmail }]);
       checkBudgetAlert(form.category, form.type, form.date, amountNum);
     }
     setShowForm(false);
@@ -1276,6 +1316,17 @@ export default function App() {
                       <div className="rz-mono text-sm font-semibold w-28 text-right shrink-0" style={{ color: t.type === "receita" ? "var(--emerald)" : "var(--brick)" }}>
                         {t.type === "receita" ? "+ " : "− "}{formatCurrency(t.amount)}
                       </div>
+                      {t.attachmentPath && (
+                        <button
+                          onClick={() => handleOpenAttachment(t.attachmentPath)}
+                          className="rz-focus p-1 rounded-md shrink-0"
+                          aria-label="Ver comprovante"
+                          title={t.attachmentName || "Ver comprovante"}
+                          style={{ color: "var(--ink-soft)" }}
+                        >
+                          <Paperclip size={14} />
+                        </button>
+                      )}
                       {householdMemberCount > 1 && (
                         <span
                           title={t.createdBy || "Desconhecido"}
@@ -1399,10 +1450,36 @@ export default function App() {
                 </div>
               </div>
 
+              <div>
+                <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Comprovante / nota fiscal (opcional)</label>
+                {form.attachmentPath ? (
+                  <div className="flex items-center gap-2">
+                    <button type="button" onClick={() => handleOpenAttachment(form.attachmentPath)} className="rz-btn-ghost rz-focus text-xs !py-2 flex items-center gap-1.5 flex-1 min-w-0 justify-start">
+                      <Paperclip size={13} className="shrink-0" /> <span className="truncate">{form.attachmentName || "Ver arquivo"}</span>
+                    </button>
+                    <button type="button" onClick={handleRemoveAttachment} className="rz-focus p-1.5 rounded-md shrink-0" aria-label="Remover anexo" style={{ color: "var(--brick)" }}>
+                      <X size={15} />
+                    </button>
+                  </div>
+                ) : (
+                  <label className="rz-btn-ghost rz-focus text-xs !py-2 inline-flex items-center gap-1.5 cursor-pointer" style={{ opacity: uploadingAttachment ? 0.6 : 1 }}>
+                    {uploadingAttachment ? <Loader2 size={13} className="animate-spin" /> : <Paperclip size={13} />}
+                    {uploadingAttachment ? "Enviando…" : "Anexar foto ou PDF"}
+                    <input
+                      type="file"
+                      accept="image/*,application/pdf"
+                      className="hidden"
+                      disabled={uploadingAttachment}
+                      onChange={(e) => { if (e.target.files[0]) handleAttachmentSelected(e.target.files[0]); e.target.value = ""; }}
+                    />
+                  </label>
+                )}
+              </div>
+
               {formError && <div className="text-xs" style={{ color: "var(--brick)" }}>{formError}</div>}
 
               <div className="flex gap-2 mt-2">
-                <button onClick={() => { setShowForm(false); resetForm(); }} className="rz-btn-ghost rz-focus flex-1 text-sm">Cancelar</button>
+                <button onClick={() => { setShowForm(false); resetForm(); setPendingId(null); }} className="rz-btn-ghost rz-focus flex-1 text-sm">Cancelar</button>
                 <button onClick={handleSubmit} className="rz-btn-primary rz-focus flex-1 text-sm flex items-center justify-center gap-2">
                   <Check size={16} /> {editingId ? "Salvar alterações" : "Adicionar"}
                 </button>

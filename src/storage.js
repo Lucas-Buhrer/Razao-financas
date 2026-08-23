@@ -8,7 +8,7 @@ import { supabase } from "./supabaseClient";
 let cachedHouseholdId = null;
 let cachedForUserId = null;
 
-async function getHouseholdId() {
+export async function getHouseholdId() {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error("Usuário não autenticado.");
   if (cachedHouseholdId && cachedForUserId === user.id) return cachedHouseholdId;
