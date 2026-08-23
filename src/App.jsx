@@ -4,13 +4,13 @@ import {
   BookOpen, Home, Receipt, Repeat, Target, BarChart3, Landmark,
   Plus, Trash2, Pencil, X, Check, Search, ChevronLeft, ChevronRight,
   TrendingUp, TrendingDown, Scale, Undo2, Menu, AlertCircle, PauseCircle, PlayCircle,
-  PiggyBank, Minus, PartyPopper, History, Settings, RotateCcw, LogOut, FileUp,
+  PiggyBank, Minus, PartyPopper, History, Settings, RotateCcw, LogOut, FileUp, Users, Copy,
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, BarChart, Bar, Legend,
 } from "recharts";
-import { storage } from "./storage";
+import { storage, resetStorageCache } from "./storage";
 import { supabase } from "./supabaseClient";
 
 /* ---------------------------------------------------------
@@ -1464,6 +1464,7 @@ function ConfiguracoesTab({
     { id: "categorias", label: "Categorias" },
     { id: "contas", label: "Contas e Cartões" },
     { id: "backup", label: "Backup" },
+    { id: "familia", label: "Família" },
     { id: "conta-usuario", label: "Conta" },
   ];
 
@@ -1523,6 +1524,8 @@ function ConfiguracoesTab({
         <BackupSection onExport={onExportBackup} onImport={onImportBackup} message={backupMessage} />
       )}
 
+      {subTab === "familia" && <HouseholdSection />}
+
       {subTab === "conta-usuario" && <ContaSection />}
     </div>
   );
@@ -1564,6 +1567,92 @@ function BackupSection({ onExport, onImport, message }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function HouseholdSection() {
+  const [code, setCode] = useState("");
+  const [joinCode, setJoinCode] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  const handleGenerateCode = async () => {
+    setLoading(true); setError(""); setSuccess(""); setCopied(false);
+    try {
+      const { data, error } = await supabase.rpc("create_invite_code");
+      if (error) throw error;
+      setCode(data);
+    } catch (err) {
+      setError(err.message || "Não foi possível gerar o código.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(code);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleJoin = async () => {
+    if (!joinCode.trim()) { setError("Informe o código de convite."); return; }
+    if (!window.confirm("Isso vai unir os dados que você já tem aos dados da família do código informado. Essa ação não pode ser desfeita. Deseja continuar?")) return;
+    setLoading(true); setError(""); setSuccess("");
+    try {
+      const { error } = await supabase.rpc("join_household", { invite_code: joinCode.trim() });
+      if (error) throw error;
+      resetStorageCache();
+      setSuccess("Você entrou na família! Recarregando a página…");
+      setTimeout(() => window.location.reload(), 1200);
+    } catch (err) {
+      setError(err.message || "Código inválido ou expirado.");
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="max-w-xl mx-auto flex flex-col gap-6">
+      <div className="rz-card p-5">
+        <div className="flex items-center gap-2 mb-1">
+          <Users size={16} style={{ color: "var(--ink-soft)" }} />
+          <h2 className="text-sm font-semibold">Convidar alguém da família</h2>
+        </div>
+        <p className="text-xs mb-4" style={{ color: "var(--ink-soft)" }}>
+          Gere um código e compartilhe com quem você quer que veja e edite os mesmos dados financeiros que você.
+        </p>
+        <button onClick={handleGenerateCode} disabled={loading} className="rz-btn-primary rz-focus text-sm disabled:opacity-60">
+          {loading && !code ? "Gerando…" : "Gerar código de convite"}
+        </button>
+        {code && (
+          <div className="flex items-center gap-2 mt-4">
+            <span className="rz-mono text-lg font-semibold px-4 py-2 rounded-lg" style={{ background: "var(--paper-alt)", letterSpacing: "0.1em" }}>{code}</span>
+            <button onClick={handleCopy} className="rz-btn-ghost rz-focus text-xs !py-2 flex items-center gap-1.5">
+              <Copy size={13} /> {copied ? "Copiado!" : "Copiar"}
+            </button>
+          </div>
+        )}
+        {code && <p className="text-xs mt-2" style={{ color: "var(--ink-soft)" }}>Válido por 7 dias, uso único.</p>}
+      </div>
+
+      <div className="rz-card p-5">
+        <h2 className="text-sm font-semibold mb-1">Entrar em uma família existente</h2>
+        <p className="text-xs mb-4" style={{ color: "var(--ink-soft)" }}>
+          Recebeu um código de alguém? Cole abaixo. <strong>Atenção:</strong> os dados que você já tem serão somados aos da família de destino.
+        </p>
+        <div className="flex gap-2">
+          <input className="rz-input rz-focus rz-mono" placeholder="CÓDIGO" value={joinCode} onChange={(e) => setJoinCode(e.target.value.toUpperCase())} />
+          <button onClick={handleJoin} disabled={loading} className="rz-btn-primary rz-focus text-sm whitespace-nowrap disabled:opacity-60">
+            Entrar
+          </button>
+        </div>
+      </div>
+
+      {error && <div className="text-xs" style={{ color: "var(--brick)" }}>{error}</div>}
+      {success && <div className="text-xs" style={{ color: "var(--emerald)" }}>{success}</div>}
     </div>
   );
 }
