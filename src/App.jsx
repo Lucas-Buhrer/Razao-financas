@@ -80,6 +80,13 @@ function dateToISO(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+function colorForEmail(email) {
+  if (!email) return "#9A8A7A";
+  let hash = 0;
+  for (let i = 0; i < email.length; i++) hash = email.charCodeAt(i) + ((hash << 5) - hash);
+  return COLOR_PALETTE[Math.abs(hash) % COLOR_PALETTE.length];
+}
+
 function detectColumn(headers, candidates) {
   const lower = headers.map((h) => h.toLowerCase().trim());
   for (const cand of candidates) {
@@ -249,6 +256,16 @@ function enrichFixedBills(fixedBills, transactions, refDate) {
 export default function App() {
   const [activeTab, setActiveTab] = useState("lancamentos");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  const [currentUserEmail, setCurrentUserEmail] = useState("");
+  const [householdMemberCount, setHouseholdMemberCount] = useState(1);
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => setCurrentUserEmail(data?.user?.email || ""));
+    supabase.from("household_members").select("id", { count: "exact", head: true }).then(({ count }) => {
+      if (count) setHouseholdMemberCount(count);
+    });
+  }, []);
 
   const [theme, setTheme] = useState(DEFAULT_THEME);
   const [themeLoaded, setThemeLoaded] = useState(false);
@@ -667,6 +684,7 @@ export default function App() {
           type: form.type, category: form.category, account: form.account,
           status: i === 0 ? form.status : "pendente",
           installmentGroupId: groupId, installmentIndex: i + 1, installmentTotal: count,
+          createdBy: currentUserEmail,
         });
       }
       setTransactions((prev) => [...prev, ...newTxs]);
@@ -679,7 +697,7 @@ export default function App() {
     if (editingId) {
       setTransactions((prev) => prev.map((t) => (t.id === editingId ? { ...t, ...form, amount: amountNum } : t)));
     } else {
-      setTransactions((prev) => [...prev, { id: uid(), ...form, amount: amountNum }]);
+      setTransactions((prev) => [...prev, { id: uid(), ...form, amount: amountNum, createdBy: currentUserEmail }]);
       checkBudgetAlert(form.category, form.type, form.date, amountNum);
     }
     setShowForm(false);
@@ -809,7 +827,7 @@ export default function App() {
     const newTx = {
       id: uid(), description: bill.description, amount: bill.amount, date: dateISO,
       type: bill.type, category: bill.category, account: bill.account, status: "pago",
-      recurringId: bill.id, recurringPeriod: periodKeyOf(refDate),
+      recurringId: bill.id, recurringPeriod: periodKeyOf(refDate), createdBy: currentUserEmail,
     };
     setTransactions((prev) => [...prev, newTx]);
   };
@@ -909,7 +927,7 @@ export default function App() {
     const newTxs = rows.map((r) => ({
       id: uid(), description: r.description, amount: r.amount, date: r.date, type: r.type,
       category: r.type === "despesa" ? despesaCategory : receitaCategory,
-      account, status: "pendente",
+      account, status: "pendente", createdBy: currentUserEmail,
     }));
     setTransactions((prev) => [...prev, ...newTxs]);
     setShowCsvImport(false);
@@ -1258,6 +1276,15 @@ export default function App() {
                       <div className="rz-mono text-sm font-semibold w-28 text-right shrink-0" style={{ color: t.type === "receita" ? "var(--emerald)" : "var(--brick)" }}>
                         {t.type === "receita" ? "+ " : "− "}{formatCurrency(t.amount)}
                       </div>
+                      {householdMemberCount > 1 && (
+                        <span
+                          title={t.createdBy || "Desconhecido"}
+                          className="rz-mono text-[9px] font-semibold w-5 h-5 rounded-full flex items-center justify-center shrink-0"
+                          style={{ background: colorForEmail(t.createdBy), color: "#fff" }}
+                        >
+                          {t.createdBy ? t.createdBy[0].toUpperCase() : "?"}
+                        </span>
+                      )}
                       <div className="flex items-center gap-1 shrink-0 justify-end">
                         <button onClick={() => openEditForm(t)} className="rz-focus p-1.5 rounded-md hover:bg-[var(--paper-alt)]" aria-label="Editar" style={{ color: "var(--ink-soft)" }}>
                           <Pencil size={15} />
