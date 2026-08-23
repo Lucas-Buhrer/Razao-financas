@@ -1510,13 +1510,13 @@ function SummaryCard({ label, value, icon: Icon, tone }) {
   const toneColor = tone === "emerald" ? "var(--emerald)" : "var(--brick)";
   const toneSoft = tone === "emerald" ? "var(--emerald-soft)" : "var(--brick-soft)";
   return (
-    <div className="rz-card p-4 flex items-center justify-between">
-      <div>
-        <div className="text-xs mb-1" style={{ color: "var(--ink-soft)" }}>{label}</div>
-        <div className="rz-mono text-xl font-semibold" style={{ color: toneColor }}>{formatCurrency(value)}</div>
+    <div className="rz-card p-4 flex items-center justify-between gap-2">
+      <div className="min-w-0">
+        <div className="text-xs mb-1 truncate" style={{ color: "var(--ink-soft)" }}>{label}</div>
+        <div className="rz-mono text-lg font-semibold whitespace-nowrap" style={{ color: toneColor }}>{formatCurrency(value)}</div>
       </div>
-      <div className="w-9 h-9 rounded-full flex items-center justify-center shrink-0" style={{ background: toneSoft }}>
-        <Icon size={17} style={{ color: toneColor }} />
+      <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: toneSoft }}>
+        <Icon size={15} style={{ color: toneColor }} />
       </div>
     </div>
   );
