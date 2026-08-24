@@ -1298,68 +1298,102 @@ export default function App() {
                 {visibleTransactions.map((t, i) => {
                   const cat = findCategory(t.type, t.category);
                   const bank = t.account ? findBank(t.account) : null;
-                  return (
-                    <div
-                      key={t.id}
-                      className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 px-4 py-3"
-                      style={{ borderTop: i === 0 ? "none" : "1px solid var(--line)" }}
+                  const statusBtn = (
+                    <button
+                      onClick={() => handleTogglePaid(t)}
+                      className={`rz-stamp rz-focus ${t.status === "pago" ? "rz-stamp-pago" : "rz-stamp-pendente"}`}
+                      style={{ cursor: "pointer" }}
+                      title={t.status === "pago" ? "Clique para marcar como pendente" : "Clique para marcar como pago"}
                     >
-                      <div className="flex items-center gap-2 flex-1 min-w-0">
-                        <span className="rz-dot" style={{ background: cat.color }} />
-                        <div className="min-w-0">
-                          <div className="text-sm font-medium truncate">{t.description}</div>
-                          <div className="text-xs" style={{ color: "var(--ink-soft)" }}>
-                            {cat.label}{bank ? ` · ${bank.label}` : ""}
+                      {t.status === "pago" ? "Pago" : "Pendente"}
+                    </button>
+                  );
+                  const attachmentBtn = t.attachmentPath && (
+                    <button
+                      onClick={() => handleOpenAttachment(t.attachmentPath)}
+                      className="rz-focus p-1 rounded-md"
+                      aria-label="Ver comprovante"
+                      title={t.attachmentName || "Ver comprovante"}
+                      style={{ color: "var(--ink-soft)" }}
+                    >
+                      <Paperclip size={14} />
+                    </button>
+                  );
+                  const avatarBadge = householdMemberCount > 1 && (
+                    <span
+                      title={t.createdBy || "Desconhecido"}
+                      className="rz-mono text-[9px] font-semibold w-5 h-5 rounded-full flex items-center justify-center shrink-0"
+                      style={{ background: colorForEmail(t.createdBy), color: "#fff" }}
+                    >
+                      {t.createdBy ? t.createdBy[0].toUpperCase() : "?"}
+                    </span>
+                  );
+                  const editDeleteBtns = (
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button onClick={() => openEditForm(t)} className="rz-focus p-1.5 rounded-md hover:bg-[var(--paper-alt)]" aria-label="Editar" style={{ color: "var(--ink-soft)" }}>
+                        <Pencil size={15} />
+                      </button>
+                      <button onClick={() => handleDelete(t)} className="rz-focus p-1.5 rounded-md hover:bg-[var(--paper-alt)]" aria-label="Excluir" style={{ color: "var(--ink-soft)" }}>
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                  );
+
+                  return (
+                    <div key={t.id} style={{ borderTop: i === 0 ? "none" : "1px solid var(--line)" }}>
+                      {/* Mobile layout */}
+                      <div className="flex flex-col gap-2 px-4 py-3 sm:hidden">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="rz-dot" style={{ background: cat.color }} />
+                          <div className="min-w-0 flex-1">
+                            <div className="text-sm font-medium truncate">{t.description}</div>
+                            <div className="text-xs" style={{ color: "var(--ink-soft)" }}>
+                              {cat.label}{bank ? ` · ${bank.label}` : ""}
+                            </div>
                           </div>
                         </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="rz-mono text-xs shrink-0" style={{ color: "var(--ink-soft)" }}>{formatDateBR(t.date)}</span>
+                            {statusBtn}
+                          </div>
+                          <span className="rz-mono text-sm font-semibold shrink-0" style={{ color: t.type === "receita" ? "var(--emerald)" : "var(--brick)" }}>
+                            {t.type === "receita" ? "+ " : "− "}{formatCurrency(t.amount)}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5">
+                            {attachmentBtn}
+                            {avatarBadge}
+                          </div>
+                          {editDeleteBtns}
+                        </div>
                       </div>
-                      <div className="rz-mono text-xs w-20 shrink-0" style={{ color: "var(--ink-soft)" }}>{formatDateBR(t.date)}</div>
-                      <div className="w-24 shrink-0 flex justify-start">
-                        <button
-                          onClick={() => handleTogglePaid(t)}
-                          className={`rz-stamp rz-focus ${t.status === "pago" ? "rz-stamp-pago" : "rz-stamp-pendente"}`}
-                          style={{ cursor: "pointer" }}
-                          title={t.status === "pago" ? "Clique para marcar como pendente" : "Clique para marcar como pago"}
-                        >
-                          {t.status === "pago" ? "Pago" : "Pendente"}
-                        </button>
-                      </div>
-                      <div className="rz-mono text-sm font-semibold w-28 text-right shrink-0" style={{ color: t.type === "receita" ? "var(--emerald)" : "var(--brick)" }}>
-                        {t.type === "receita" ? "+ " : "− "}{formatCurrency(t.amount)}
-                      </div>
-                      <div className="w-6 shrink-0 flex justify-center">
-                        {t.attachmentPath && (
-                          <button
-                            onClick={() => handleOpenAttachment(t.attachmentPath)}
-                            className="rz-focus p-1 rounded-md"
-                            aria-label="Ver comprovante"
-                            title={t.attachmentName || "Ver comprovante"}
-                            style={{ color: "var(--ink-soft)" }}
-                          >
-                            <Paperclip size={14} />
-                          </button>
-                        )}
-                      </div>
-                      {householdMemberCount > 1 && (
-                        <span
-                          title={t.createdBy || "Desconhecido"}
-                          className="rz-mono text-[9px] font-semibold w-5 h-5 rounded-full flex items-center justify-center shrink-0"
-                          style={{ background: colorForEmail(t.createdBy), color: "#fff" }}
-                        >
-                          {t.createdBy ? t.createdBy[0].toUpperCase() : "?"}
-                        </span>
-                      )}
-                      <div className="flex items-center gap-1 shrink-0 justify-end">
-                        <button onClick={() => openEditForm(t)} className="rz-focus p-1.5 rounded-md hover:bg-[var(--paper-alt)]" aria-label="Editar" style={{ color: "var(--ink-soft)" }}>
-                          <Pencil size={15} />
-                        </button>
-                        <button onClick={() => handleDelete(t)} className="rz-focus p-1.5 rounded-md hover:bg-[var(--paper-alt)]" aria-label="Excluir" style={{ color: "var(--ink-soft)" }}>
-                          <Trash2 size={15} />
-                        </button>
+
+                      {/* Desktop layout */}
+                      <div className="hidden sm:flex sm:items-center gap-4 px-4 py-3">
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                          <span className="rz-dot" style={{ background: cat.color }} />
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium truncate">{t.description}</div>
+                            <div className="text-xs" style={{ color: "var(--ink-soft)" }}>
+                              {cat.label}{bank ? ` · ${bank.label}` : ""}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="rz-mono text-xs w-20 shrink-0" style={{ color: "var(--ink-soft)" }}>{formatDateBR(t.date)}</div>
+                        <div className="w-24 shrink-0 flex justify-start">{statusBtn}</div>
+                        <div className="rz-mono text-sm font-semibold w-28 text-right shrink-0" style={{ color: t.type === "receita" ? "var(--emerald)" : "var(--brick)" }}>
+                          {t.type === "receita" ? "+ " : "− "}{formatCurrency(t.amount)}
+                        </div>
+                        <div className="w-6 shrink-0 flex justify-center">{attachmentBtn}</div>
+                        {avatarBadge}
+                        <div className="justify-end">{editDeleteBtns}</div>
                       </div>
                     </div>
                   );
                 })}
+
               </div>
             )}
           </>
@@ -2504,7 +2538,7 @@ function FixedBillsTab({
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
         <SummaryCard label="Total mensal (fixas ativas)" value={totalMensal} icon={Repeat} tone="brick" />
-        <div className="rz-card p-4 flex items-center justify-between">
+        <div className="rz-card p-4 flex items-center justify-between flex-wrap gap-3">
           <div>
             <div className="text-xs mb-1" style={{ color: "var(--ink-soft)" }}>Status deste mês</div>
             <div className="rz-mono text-sm">
@@ -2536,38 +2570,69 @@ function FixedBillsTab({
             {activeBills.map((b, i) => {
               const cat = findCategory(b.type, b.category);
               const bank = b.account ? findBank(b.account) : null;
+              const amountEl = (
+                <span className="rz-mono text-sm font-semibold" style={{ color: b.type === "receita" ? "var(--emerald)" : "var(--brick)" }}>
+                  {formatCurrency(b.amount)}
+                </span>
+              );
+              const statusEl = (
+                <span className={`rz-stamp shrink-0 ${STATUS_CLASS[b.status]}`}>
+                  {b.status === "atrasada" && <AlertCircle size={11} />} {STATUS_LABEL[b.status]}
+                </span>
+              );
+              const actionBtns = (
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {b.status === "lancada" ? (
+                    <button onClick={() => onUndoLaunch(b)} className="rz-btn-ghost rz-focus text-xs !py-1.5 !px-3">Desfazer</button>
+                  ) : (
+                    <button onClick={() => onLaunch(b)} className="rz-btn-primary rz-focus text-xs !py-1.5 !px-3">Lançar</button>
+                  )}
+                  <button onClick={() => onToggleActive(b)} className="rz-focus p-1.5 rounded-md" aria-label="Pausar" style={{ color: "var(--ink-soft)" }}>
+                    <PauseCircle size={15} />
+                  </button>
+                  <button onClick={() => onOpenEdit(b)} className="rz-focus p-1.5 rounded-md" aria-label="Editar" style={{ color: "var(--ink-soft)" }}>
+                    <Pencil size={15} />
+                  </button>
+                  <button onClick={() => onDelete(b)} className="rz-focus p-1.5 rounded-md" aria-label="Excluir" style={{ color: "var(--ink-soft)" }}>
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              );
+
               return (
-                <div key={b.id} className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 px-4 py-3" style={{ borderTop: i === 0 ? "none" : "1px solid var(--line)" }}>
-                  <div className="flex items-center gap-2 flex-1 min-w-0">
-                    <span className="rz-dot" style={{ background: cat.color }} />
-                    <div className="min-w-0">
-                      <div className="text-sm font-medium truncate">{b.description}</div>
-                      <div className="text-xs" style={{ color: "var(--ink-soft)" }}>
-                        {cat.label}{bank ? ` · ${bank.label}` : ""} · Vence dia {b.dueDay}
+                <div key={b.id} style={{ borderTop: i === 0 ? "none" : "1px solid var(--line)" }}>
+                  {/* Mobile layout */}
+                  <div className="flex flex-col gap-2 px-4 py-3 sm:hidden">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="rz-dot" style={{ background: cat.color }} />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium truncate">{b.description}</div>
+                        <div className="text-xs" style={{ color: "var(--ink-soft)" }}>
+                          {cat.label}{bank ? ` · ${bank.label}` : ""} · Vence dia {b.dueDay}
+                        </div>
                       </div>
                     </div>
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      {statusEl}
+                      {amountEl}
+                    </div>
+                    <div className="flex items-center justify-end flex-wrap gap-1.5">{actionBtns}</div>
                   </div>
-                  <div className="rz-mono text-sm font-semibold w-28 shrink-0" style={{ color: b.type === "receita" ? "var(--emerald)" : "var(--brick)" }}>
-                    {formatCurrency(b.amount)}
-                  </div>
-                  <span className={`rz-stamp shrink-0 ${STATUS_CLASS[b.status]}`}>
-                    {b.status === "atrasada" && <AlertCircle size={11} />} {STATUS_LABEL[b.status]}
-                  </span>
-                  <div className="flex items-center gap-1.5 shrink-0 justify-end">
-                    {b.status === "lancada" ? (
-                      <button onClick={() => onUndoLaunch(b)} className="rz-btn-ghost rz-focus text-xs !py-1.5 !px-3">Desfazer</button>
-                    ) : (
-                      <button onClick={() => onLaunch(b)} className="rz-btn-primary rz-focus text-xs !py-1.5 !px-3">Lançar</button>
-                    )}
-                    <button onClick={() => onToggleActive(b)} className="rz-focus p-1.5 rounded-md" aria-label="Pausar" style={{ color: "var(--ink-soft)" }}>
-                      <PauseCircle size={15} />
-                    </button>
-                    <button onClick={() => onOpenEdit(b)} className="rz-focus p-1.5 rounded-md" aria-label="Editar" style={{ color: "var(--ink-soft)" }}>
-                      <Pencil size={15} />
-                    </button>
-                    <button onClick={() => onDelete(b)} className="rz-focus p-1.5 rounded-md" aria-label="Excluir" style={{ color: "var(--ink-soft)" }}>
-                      <Trash2 size={15} />
-                    </button>
+
+                  {/* Desktop layout */}
+                  <div className="hidden sm:flex sm:items-center gap-4 px-4 py-3">
+                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                      <span className="rz-dot" style={{ background: cat.color }} />
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium truncate">{b.description}</div>
+                        <div className="text-xs" style={{ color: "var(--ink-soft)" }}>
+                          {cat.label}{bank ? ` · ${bank.label}` : ""} · Vence dia {b.dueDay}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="w-28 shrink-0">{amountEl}</div>
+                    {statusEl}
+                    <div className="justify-end">{actionBtns}</div>
                   </div>
                 </div>
               );
