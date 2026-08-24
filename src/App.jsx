@@ -822,6 +822,15 @@ export default function App() {
     downloadCsv(rows, filename);
   };
 
+  const handleMarkVisibleAsPaid = () => {
+    const pendentes = visibleTransactions.filter((t) => t.status === "pendente");
+    if (pendentes.length === 0) return;
+    if (!window.confirm(`Marcar ${pendentes.length} lançamento${pendentes.length !== 1 ? "s" : ""} como pago?`)) return;
+    const ids = new Set(pendentes.map((t) => t.id));
+    setTransactions((prev) => prev.map((t) => (ids.has(t.id) ? { ...t, status: "pago" } : t)));
+    setToast({ message: `${pendentes.length} lançamento${pendentes.length !== 1 ? "s" : ""} marcado${pendentes.length !== 1 ? "s" : ""} como pago.` });
+  };
+
   const handleTogglePaid = (t) => {
     setTransactions((prev) => prev.map((x) => (x.id === t.id ? { ...x, status: x.status === "pago" ? "pendente" : "pago" } : x)));
   };
@@ -1073,11 +1082,11 @@ export default function App() {
     reader.readAsText(file);
   };
 
-  const handleConfirmCsvImport = (rows, despesaCategory, receitaCategory, account) => {
+  const handleConfirmCsvImport = (rows, despesaCategory, receitaCategory, account, status) => {
     const newTxs = rows.map((r) => ({
       id: uid(), description: r.description, amount: r.amount, date: r.date, type: r.type,
       category: r.type === "despesa" ? despesaCategory : receitaCategory,
-      account, status: "pendente", createdBy: currentUserEmail,
+      account, status: status || "pago", createdBy: currentUserEmail,
     }));
     setTransactions((prev) => [...prev, ...newTxs]);
     setShowCsvImport(false);
@@ -1404,6 +1413,17 @@ export default function App() {
                 <Plus size={16} /> Novo lançamento
               </button>
             </div>
+
+            {visibleTransactions.filter((t) => t.status === "pendente").length > 0 && (
+              <div className="rz-card p-3 mb-4 flex items-center justify-between gap-3 flex-wrap">
+                <p className="text-sm" style={{ color: "var(--ink-soft)" }}>
+                  {visibleTransactions.filter((t) => t.status === "pendente").length} lançamento{visibleTransactions.filter((t) => t.status === "pendente").length !== 1 ? "s" : ""} pendente{visibleTransactions.filter((t) => t.status === "pendente").length !== 1 ? "s" : ""} neste filtro — pendentes não entram no saldo das contas.
+                </p>
+                <button onClick={handleMarkVisibleAsPaid} className="rz-btn-ghost rz-focus text-xs !py-1.5 !px-3 whitespace-nowrap">
+                  Marcar todos como pagos
+                </button>
+              </div>
+            )}
 
             {showCsvImport && (
               <CsvImportModal
@@ -2896,6 +2916,7 @@ function CsvImportModal({ categoriesByType, banksList, onConfirm, onCancel }) {
   const [despesaCategory, setDespesaCategory] = useState("");
   const [receitaCategory, setReceitaCategory] = useState("");
   const [account, setAccount] = useState("");
+  const [status, setStatus] = useState("pago");
 
   const handleFile = (file) => {
     setFileName(file.name);
@@ -2920,7 +2941,7 @@ function CsvImportModal({ categoriesByType, banksList, onConfirm, onCancel }) {
   const handleConfirm = () => {
     if (hasDespesas && !despesaCategory) { setError("Selecione uma categoria para as despesas importadas."); return; }
     if (hasReceitas && !receitaCategory) { setError("Selecione uma categoria para as receitas importadas."); return; }
-    onConfirm(validRows, despesaCategory, receitaCategory, account);
+    onConfirm(validRows, despesaCategory, receitaCategory, account, status);
   };
 
   return (
@@ -2972,6 +2993,16 @@ function CsvImportModal({ categoriesByType, banksList, onConfirm, onCancel }) {
                   {banksList.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
                 </select>
               </div>
+              <div>
+                <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Status</label>
+                <select className="rz-input rz-focus" value={status} onChange={(e) => setStatus(e.target.value)}>
+                  <option value="pago">Já pago (extrato do banco)</option>
+                  <option value="pendente">Pendente (ainda vai acontecer)</option>
+                </select>
+                <p className="text-xs mt-1" style={{ color: "var(--ink-soft)" }}>
+                  Só lançamentos pagos entram no saldo das contas.
+                </p>
+              </div>
             </div>
 
             <div className="rz-card overflow-hidden mb-4" style={{ maxHeight: 220, overflowY: "auto" }}>
@@ -3013,10 +3044,12 @@ function CarteiraTab({ transactions, banksList, refDate, shiftMonth, findCategor
   // Saldo por conta: só lançamentos já pagos, histórico completo
   const saldoPorConta = useMemo(() => {
     return contas.map((c) => {
-      const saldo = transactions
-        .filter((t) => t.account === c.id && t.status === "pago")
+      const daConta = transactions.filter((t) => t.account === c.id);
+      const saldo = daConta.filter((t) => t.status === "pago")
         .reduce((s, t) => s + (t.type === "receita" ? t.amount : -t.amount), 0);
-      return { ...c, saldo };
+      const pendente = daConta.filter((t) => t.status === "pendente")
+        .reduce((s, t) => s + (t.type === "receita" ? t.amount : -t.amount), 0);
+      return { ...c, saldo, pendente };
     });
   }, [contas, transactions]);
 
@@ -3080,7 +3113,14 @@ function CarteiraTab({ transactions, banksList, refDate, shiftMonth, findCategor
           {saldoPorConta.map((c, i) => (
             <div key={c.id} className="flex items-center gap-3 px-4 py-3" style={{ borderTop: i === 0 ? "none" : "1px solid var(--line)" }}>
               <span className="rz-dot" style={{ background: c.color }} />
-              <span className="text-sm flex-1 truncate">{c.label}</span>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm truncate">{c.label}</div>
+                {c.pendente !== 0 && (
+                  <div className="text-xs" style={{ color: "var(--gold)" }}>
+                    {formatCurrency(c.pendente)} pendente · previsto {formatCurrency(c.saldo + c.pendente)}
+                  </div>
+                )}
+              </div>
               <span className="rz-mono text-sm font-semibold whitespace-nowrap" style={{ color: c.saldo >= 0 ? "var(--emerald)" : "var(--brick)" }}>
                 {formatCurrency(c.saldo)}
               </span>
