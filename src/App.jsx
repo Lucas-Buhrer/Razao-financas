@@ -39,10 +39,10 @@ const CATEGORIES = {
 };
 
 const DEFAULT_BANKS = [
-  { id: "carteira", label: "Carteira", color: "#6B5B3E" },
-  { id: "conta_corrente", label: "Conta Corrente", color: "#4A6FA5" },
-  { id: "poupanca", label: "Poupança", color: "#3A7A8C" },
-  { id: "cartao_credito", label: "Cartão de Crédito", color: "#7A6A9E" },
+  { id: "carteira", label: "Carteira", color: "#6B5B3E", initialBalance: 0 },
+  { id: "conta_corrente", label: "Conta Corrente", color: "#4A6FA5", initialBalance: 0 },
+  { id: "poupanca", label: "Poupança", color: "#3A7A8C", initialBalance: 0 },
+  { id: "cartao_credito", label: "Cartão de Crédito", color: "#7A6A9E", initialBalance: 0 },
 ];
 
 const NAV_ITEMS = [
@@ -213,9 +213,9 @@ function getAmountForPeriod(bill, refDate) {
   return applicable.amount;
 }
 
-function buildCashFlowProjection(transactions, fixedBills, horizonDays) {
+function buildCashFlowProjection(transactions, fixedBills, horizonDays, saldosIniciais = 0) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const baseline = transactions.filter((t) => t.status === "pago" && t.type !== "transferencia").reduce((s, t) => s + (t.type === "receita" ? t.amount : -t.amount), 0);
+  const baseline = saldosIniciais + transactions.filter((t) => t.status === "pago" && t.type !== "transferencia").reduce((s, t) => s + (t.type === "receita" ? t.amount : -t.amount), 0);
 
   const events = [];
 
@@ -310,7 +310,7 @@ export default function App() {
 
   const [customBanks, setCustomBanks] = useState([]);
   const [banksLoaded, setBanksLoaded] = useState(false);
-  const [bankForm, setBankForm] = useState({ label: "", color: COLOR_PALETTE[0] });
+  const [bankForm, setBankForm] = useState({ label: "", color: COLOR_PALETTE[0], initialBalance: "" });
   const [bankError, setBankError] = useState("");
   const [hiddenDefaultBanks, setHiddenDefaultBanks] = useState([]);
 
@@ -639,6 +639,8 @@ export default function App() {
   const banksList = useMemo(() => [...DEFAULT_BANKS.filter((b) => !hiddenDefaultBanks.includes(b.id)), ...customBanks], [customBanks, hiddenDefaultBanks]);
   const findBank = (id) => [...DEFAULT_BANKS, ...customBanks].find((b) => b.id === id);
 
+  const saldosIniciais = useMemo(() => banksList.reduce((s, b) => s + (b.initialBalance || 0), 0), [banksList]);
+
   const periodFiltered = useMemo(() => {
     if (periodMode === "todos") return transactions;
     const y = refDate.getFullYear(), m = refDate.getMonth();
@@ -912,11 +914,11 @@ export default function App() {
     }
   };
 
-  const handleUpdateBank = (bank, newLabel, newColor) => {
+  const handleUpdateBank = (bank, newLabel, newColor, extra = {}) => {
     const label = newLabel.trim();
     if (!label) return;
     const isCustom = customBanks.some((b) => b.id === bank.id);
-    const patch = { label, color: newColor };
+    const patch = { label, color: newColor, ...extra };
     if (isCustom) {
       setCustomBanks((prev) => prev.map((b) => (b.id === bank.id ? { ...b, ...patch } : b)));
     } else {
@@ -929,8 +931,9 @@ export default function App() {
     const label = bankForm.label.trim();
     if (!label) { setBankError("Dê um nome para o banco ou conta."); return; }
     if (banksList.some((b) => b.label.toLowerCase() === label.toLowerCase())) { setBankError("Já existe um banco com esse nome."); return; }
-    setCustomBanks((prev) => [...prev, { id: `banco_${uid()}`, label, color: bankForm.color }]);
-    setBankForm({ label: "", color: COLOR_PALETTE[0] });
+    const inicial = parseFloat(String(bankForm.initialBalance).replace(",", ".")) || 0;
+    setCustomBanks((prev) => [...prev, { id: `banco_${uid()}`, label, color: bankForm.color, initialBalance: inicial }]);
+    setBankForm({ label: "", color: COLOR_PALETTE[0], initialBalance: "" });
     setBankError("");
   };
 
@@ -1251,6 +1254,7 @@ export default function App() {
             findBank={findBank}
             onLaunchFixedBill={handleLaunchFixedBill}
             savingsAccounts={savingsAccounts}
+            saldosIniciais={saldosIniciais}
           />
         ) : activeTab === "carteira" ? (
           <CarteiraTab
@@ -1299,7 +1303,7 @@ export default function App() {
             onResetData={resetAllData}
           />
         ) : activeTab === "relatorios" ? (
-          <ReportsTab transactions={transactions} findCategory={findCategory} fixedBills={fixedBills} savingsAccounts={savingsAccounts} />
+          <ReportsTab transactions={transactions} findCategory={findCategory} fixedBills={fixedBills} savingsAccounts={savingsAccounts} saldosIniciais={saldosIniciais} />
         ) : activeTab === "orcamento" ? (
           <OrcamentoTab
             budgets={budgets}
@@ -1488,7 +1492,9 @@ export default function App() {
                       style={{ cursor: "pointer" }}
                       title={t.status === "pago" ? "Clique para marcar como pendente" : "Clique para marcar como pago"}
                     >
-                      {t.status === "pago" ? "Pago" : "Pendente"}
+                      {ehTransf
+                        ? (t.status === "pago" ? "Concluída" : "Agendada")
+                        : (t.status === "pago" ? "Pago" : "Pendente")}
                     </button>
                   );
                   const attachmentBtn = t.attachmentPath && (
@@ -1687,7 +1693,7 @@ export default function App() {
                     <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Status</label>
                     <select className="rz-input rz-focus" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
                       <option value="pago">Concluída</option>
-                      <option value="pendente">Pendente</option>
+                      <option value="pendente">Agendada</option>
                     </select>
                   </div>
                   <p className="text-xs -mt-1" style={{ color: "var(--ink-soft)" }}>
@@ -2175,14 +2181,14 @@ function TemaSection({ theme, setTheme }) {
   );
 }
 
-function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts }) {
+function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, saldosIniciais }) {
   const [monthsCount, setMonthsCount] = useState(6);
   const [horizonDays, setHorizonDays] = useState(90);
   const today = new Date();
   const [customStart, setCustomStart] = useState(() => new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10));
   const [customEnd, setCustomEnd] = useState(() => todayISO());
 
-  const projection = useMemo(() => buildCashFlowProjection(transactions, fixedBills, horizonDays), [transactions, fixedBills, horizonDays]);
+  const projection = useMemo(() => buildCashFlowProjection(transactions, fixedBills, horizonDays, saldosIniciais), [transactions, fixedBills, horizonDays, saldosIniciais]);
 
   const savingsTotal = useMemo(() => savingsAccounts.reduce((s, a) => s + a.currentAmount, 0), [savingsAccounts]);
 
@@ -3111,7 +3117,7 @@ function CarteiraTab({ transactions, banksList, setActiveTab }) {
   const saldoPorConta = useMemo(() => {
     return banksList.map((c) => {
       const daConta = transactions.filter((t) => t.account === c.id || t.toAccount === c.id);
-      const saldo = daConta.filter((t) => t.status === "pago")
+      const saldo = (c.initialBalance || 0) + daConta.filter((t) => t.status === "pago")
         .reduce((s, t) => s + efeitoNaConta(t, c.id), 0);
       const pendente = daConta.filter((t) => t.status === "pendente")
         .reduce((s, t) => s + efeitoNaConta(t, c.id), 0);
@@ -3315,11 +3321,11 @@ function SavingsCard({ account, onDelete, onContribute, onDeleteHistoryEntry }) 
   );
 }
 
-function VisaoGeralTab({ transactions, periodFiltered, totals, refDate, periodMode, shiftMonth, setPeriodMode, findCategory, setActiveTab, fixedBills, findBank, onLaunchFixedBill, savingsAccounts }) {
+function VisaoGeralTab({ transactions, periodFiltered, totals, refDate, periodMode, shiftMonth, setPeriodMode, findCategory, setActiveTab, fixedBills, findBank, onLaunchFixedBill, savingsAccounts, saldosIniciais }) {
   const saldoTotal = useMemo(
-    () => transactions.filter((t) => t.status === "pago" && t.type !== "transferencia")
+    () => saldosIniciais + transactions.filter((t) => t.status === "pago" && t.type !== "transferencia")
       .reduce((s, t) => s + (t.type === "receita" ? t.amount : -t.amount), 0),
-    [transactions]
+    [transactions, saldosIniciais]
   );
 
   const savingsTotal = useMemo(() => savingsAccounts.reduce((s, a) => s + a.currentAmount, 0), [savingsAccounts]);
@@ -3352,7 +3358,7 @@ function VisaoGeralTab({ transactions, periodFiltered, totals, refDate, periodMo
     for (let i = 5; i >= 0; i--) months.push(new Date(refDate.getFullYear(), refDate.getMonth() - i, 1));
     return months.map((d) => {
       const endOfMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59);
-      const saldo = transactions
+      const saldo = saldosIniciais + transactions
         .filter((t) => t.status === "pago" && t.type !== "transferencia" && new Date(t.date + "T00:00:00") <= endOfMonth)
         .reduce((s, t) => s + (t.type === "receita" ? t.amount : -t.amount), 0);
       return { mes: `${MONTHS[d.getMonth()].slice(0, 3)}/${String(d.getFullYear()).slice(2)}`, saldo };
@@ -3568,10 +3574,21 @@ function BancosTab({ banksList, customBanks, bankForm, setBankForm, bankError, o
             onChange={(e) => setBankForm({ ...bankForm, label: e.target.value })}
             onKeyDown={(e) => e.key === "Enter" && onAdd()}
           />
+          <input
+            className="rz-input rz-focus rz-mono sm:w-40"
+            inputMode="decimal"
+            placeholder="Saldo inicial"
+            value={bankForm.initialBalance}
+            onChange={(e) => setBankForm({ ...bankForm, initialBalance: e.target.value })}
+            onKeyDown={(e) => e.key === "Enter" && onAdd()}
+          />
           <button onClick={onAdd} className="rz-btn-primary rz-focus flex items-center justify-center gap-2 text-sm whitespace-nowrap">
             <Plus size={16} /> Adicionar
           </button>
         </div>
+        <p className="text-xs mb-3" style={{ color: "var(--ink-soft)" }}>
+          O saldo inicial é quanto a conta já tinha antes de você começar a usar o Razão. Ele entra no saldo, mas não conta como receita.
+        </p>
 
         <div className="flex flex-wrap gap-2 mb-1">
           {COLOR_PALETTE.map((color) => (
@@ -3600,7 +3617,7 @@ function BancosTab({ banksList, customBanks, bankForm, setBankForm, bankError, o
       </div>
       <div className="rz-card overflow-hidden">
         {banksList.map((b, i) => (
-          <CategoryRow key={b.id} cat={b} isFirst={i === 0} isCustom={customBanks.some((x) => x.id === b.id)} onDelete={onDelete} onUpdate={onUpdate} />
+          <CategoryRow key={b.id} cat={b} isFirst={i === 0} isCustom={customBanks.some((x) => x.id === b.id)} onDelete={onDelete} onUpdate={onUpdate} isBank />
         ))}
       </div>
       <p className="text-xs mt-4" style={{ color: "var(--ink-soft)" }}>
@@ -3693,18 +3710,21 @@ function CategoriasTab({ categoriesByType, customCategories, categoryForm, setCa
   );
 }
 
-function CategoryRow({ cat, isFirst, isCustom, onDelete, onUpdate }) {
+function CategoryRow({ cat, isFirst, isCustom, onDelete, onUpdate, isBank }) {
   const [editing, setEditing] = useState(false);
   const [tempLabel, setTempLabel] = useState(cat.label);
   const [tempColor, setTempColor] = useState(cat.color);
+  const [tempInitial, setTempInitial] = useState(String(cat.initialBalance ?? ""));
 
   const startEdit = () => {
     setTempLabel(cat.label); setTempColor(cat.color);
+    setTempInitial(String(cat.initialBalance ?? ""));
     setEditing(true);
   };
   const save = () => {
     if (!tempLabel.trim()) return;
-    onUpdate(cat, tempLabel, tempColor);
+    const extra = isBank ? { initialBalance: parseFloat(String(tempInitial).replace(",", ".")) || 0 } : {};
+    onUpdate(cat, tempLabel, tempColor, extra);
     setEditing(false);
   };
 
@@ -3733,6 +3753,20 @@ function CategoryRow({ cat, isFirst, isCustom, onDelete, onUpdate }) {
             />
           ))}
         </div>
+        {isBank && (
+          <div className="flex items-center gap-2 mt-3">
+            <label className="text-xs" style={{ color: "var(--ink-soft)" }}>Saldo inicial</label>
+            <input
+              className="rz-input rz-focus rz-mono text-sm"
+              style={{ width: 120 }}
+              inputMode="decimal"
+              placeholder="0,00"
+              value={tempInitial}
+              onChange={(e) => setTempInitial(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") save(); }}
+            />
+          </div>
+        )}
       </div>
     );
   }
@@ -3740,7 +3774,12 @@ function CategoryRow({ cat, isFirst, isCustom, onDelete, onUpdate }) {
   return (
     <div className="flex items-center gap-2 px-3 py-2.5" style={{ borderTop: isFirst ? "none" : "1px solid var(--line)" }}>
       <span className="rz-dot" style={{ background: cat.color }} />
-      <span className="text-sm flex-1 truncate">{cat.label}</span>
+      <div className="flex-1 min-w-0">
+        <div className="text-sm truncate">{cat.label}</div>
+        {isBank && cat.initialBalance ? (
+          <div className="text-xs" style={{ color: "var(--ink-soft)" }}>Saldo inicial: {formatCurrency(cat.initialBalance)}</div>
+        ) : null}
+      </div>
       {!isCustom && <span className="rz-mono text-[9px] opacity-50">PADRÃO</span>}
       {onUpdate && (
         <button onClick={startEdit} className="rz-focus p-1 rounded-md" aria-label="Editar" style={{ color: "var(--ink-soft)" }}>
