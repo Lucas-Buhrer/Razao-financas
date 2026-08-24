@@ -76,7 +76,7 @@ const todayISO = () => new Date().toISOString().slice(0, 10);
 const formatCurrency = (v) => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(Number(v) || 0);
 const formatDateBR = (iso) => { const [y,m,d] = iso.split("-"); return `${d}/${m}/${y}`; };
 
-const emptyForm = { description: "", amount: "", date: todayISO(), type: "despesa", category: "", account: "", status: "pago", installments: false, installmentCount: "2", attachmentPath: null, attachmentName: "" };
+const emptyForm = { description: "", amount: "", date: todayISO(), type: "despesa", category: "", account: "", toAccount: "", status: "pago", installments: false, installmentCount: "2", attachmentPath: null, attachmentName: "" };
 
 function dateToISO(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -215,12 +215,12 @@ function getAmountForPeriod(bill, refDate) {
 
 function buildCashFlowProjection(transactions, fixedBills, horizonDays) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const baseline = transactions.filter((t) => t.status === "pago").reduce((s, t) => s + (t.type === "receita" ? t.amount : -t.amount), 0);
+  const baseline = transactions.filter((t) => t.status === "pago" && t.type !== "transferencia").reduce((s, t) => s + (t.type === "receita" ? t.amount : -t.amount), 0);
 
   const events = [];
 
   transactions.forEach((t) => {
-    if (t.status !== "pendente") return;
+    if (t.status !== "pendente" || t.type === "transferencia") return;
     const d = new Date(t.date + "T00:00:00");
     const diffDays = Math.round((d - today) / 86400000);
     if (diffDays >= 0 && diffDays <= horizonDays) {
@@ -671,7 +671,7 @@ export default function App() {
   const openEditForm = (t) => {
     setForm({
       description: t.description, amount: String(t.amount), date: t.date, type: t.type,
-      category: t.category, account: t.account || "", status: t.status,
+      category: t.category, account: t.account || "", toAccount: t.toAccount || "", status: t.status,
       installments: false, installmentCount: "2",
       attachmentPath: t.attachmentPath || null, attachmentName: t.attachmentName || "",
     });
@@ -680,7 +680,12 @@ export default function App() {
   };
 
   const handleTypeChange = (type) => {
-    setForm((f) => ({ ...f, type, category: "", installments: type === "despesa" ? f.installments : false }));
+    setForm((f) => ({
+      ...f, type,
+      category: type === "transferencia" ? "" : "",
+      installments: type === "despesa" ? f.installments : false,
+      toAccount: type === "transferencia" ? f.toAccount : "",
+    }));
   };
 
   const handleAttachmentSelected = async (file) => {
@@ -733,6 +738,22 @@ export default function App() {
     if (!form.description.trim()) { setFormError("Dê uma descrição para o lançamento."); return; }
     if (!amountNum || amountNum <= 0) { setFormError("Informe um valor maior que zero."); return; }
     if (!form.date) { setFormError("Selecione uma data."); return; }
+
+    if (form.type === "transferencia") {
+      if (!form.account) { setFormError("Selecione a conta de origem."); return; }
+      if (!form.toAccount) { setFormError("Selecione a conta de destino."); return; }
+      if (form.account === form.toAccount) { setFormError("Origem e destino precisam ser contas diferentes."); return; }
+      const dados = { ...form, amount: amountNum, category: "", installments: false };
+      if (editingId) {
+        setTransactions((prev) => prev.map((t) => (t.id === editingId ? { ...t, ...dados } : t)));
+      } else {
+        setTransactions((prev) => [...prev, { id: pendingId || uid(), ...dados, createdBy: currentUserEmail }]);
+      }
+      setShowForm(false);
+      resetForm();
+      return;
+    }
+
     if (!form.category) { setFormError("Selecione uma categoria."); return; }
 
     if (!editingId && form.type === "despesa" && form.installments) {
@@ -813,9 +834,10 @@ export default function App() {
     const rows = list.map((t) => ({
       Data: formatDateBR(t.date),
       Descrição: t.description,
-      Tipo: t.type === "receita" ? "Receita" : "Despesa",
-      Categoria: findCategory(t.type, t.category).label,
+      Tipo: t.type === "receita" ? "Receita" : t.type === "transferencia" ? "Transferência" : "Despesa",
+      Categoria: t.type === "transferencia" ? "" : findCategory(t.type, t.category).label,
       Conta: t.account ? (findBank(t.account)?.label || "") : "",
+      "Conta destino": t.toAccount ? (findBank(t.toAccount)?.label || "") : "",
       Status: t.status === "pago" ? "Pago" : "Pendente",
       Valor: String(t.amount).replace(".", ","),
     }));
@@ -1379,10 +1401,13 @@ export default function App() {
                 <option value="todos">Todos os tipos</option>
                 <option value="receita">Receitas</option>
                 <option value="despesa">Despesas</option>
+                <option value="transferencia">Transferências</option>
               </select>
               <select className="rz-input text-sm sm:w-auto" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
                 <option value="todas">Todas as categorias</option>
-                {(typeFilter === "todos" ? [...categoriesByType.receita, ...categoriesByType.despesa] : categoriesByType[typeFilter]).map((c) => (
+                {(typeFilter === "todos" || typeFilter === "transferencia"
+                  ? [...categoriesByType.receita, ...categoriesByType.despesa]
+                  : categoriesByType[typeFilter]).map((c) => (
                   <option key={c.id} value={c.id}>{c.label}</option>
                 ))}
               </select>
@@ -1447,8 +1472,15 @@ export default function App() {
             ) : (
               <div className="rz-card overflow-hidden">
                 {visibleTransactions.map((t, i) => {
-                  const cat = findCategory(t.type, t.category);
+                  const ehTransf = t.type === "transferencia";
+                  const cat = ehTransf ? { label: "Transferência", color: "var(--ink-soft)" } : findCategory(t.type, t.category);
                   const bank = t.account ? findBank(t.account) : null;
+                  const bankTo = t.toAccount ? findBank(t.toAccount) : null;
+                  const subtitulo = ehTransf
+                    ? `${bank ? bank.label : "?"} → ${bankTo ? bankTo.label : "?"}`
+                    : `${cat.label}${bank ? ` · ${bank.label}` : ""}`;
+                  const corValor = ehTransf ? "var(--ink-soft)" : (t.type === "receita" ? "var(--emerald)" : "var(--brick)");
+                  const sinalValor = ehTransf ? "" : (t.type === "receita" ? "+ " : "− ");
                   const statusBtn = (
                     <button
                       onClick={() => handleTogglePaid(t)}
@@ -1501,9 +1533,7 @@ export default function App() {
                           <span className="rz-dot" style={{ background: cat.color }} />
                           <div className="min-w-0 flex-1">
                             <div className="text-sm font-medium truncate">{t.description}</div>
-                            <div className="text-xs" style={{ color: "var(--ink-soft)" }}>
-                              {cat.label}{bank ? ` · ${bank.label}` : ""}
-                            </div>
+                            <div className="text-xs" style={{ color: "var(--ink-soft)" }}>{subtitulo}</div>
                           </div>
                         </div>
                         <div className="flex items-center justify-between gap-2">
@@ -1511,8 +1541,8 @@ export default function App() {
                             <span className="rz-mono text-xs shrink-0" style={{ color: "var(--ink-soft)" }}>{formatDateBR(t.date)}</span>
                             {statusBtn}
                           </div>
-                          <span className="rz-mono text-sm font-semibold shrink-0" style={{ color: t.type === "receita" ? "var(--emerald)" : "var(--brick)" }}>
-                            {t.type === "receita" ? "+ " : "− "}{formatCurrency(t.amount)}
+                          <span className="rz-mono text-sm font-semibold shrink-0" style={{ color: corValor }}>
+                            {sinalValor}{formatCurrency(t.amount)}
                           </span>
                         </div>
                         <div className="flex items-center justify-between gap-2">
@@ -1530,15 +1560,13 @@ export default function App() {
                           <span className="rz-dot" style={{ background: cat.color }} />
                           <div className="min-w-0">
                             <div className="text-sm font-medium truncate">{t.description}</div>
-                            <div className="text-xs" style={{ color: "var(--ink-soft)" }}>
-                              {cat.label}{bank ? ` · ${bank.label}` : ""}
-                            </div>
+                            <div className="text-xs" style={{ color: "var(--ink-soft)" }}>{subtitulo}</div>
                           </div>
                         </div>
                         <div className="rz-mono text-xs w-20 shrink-0" style={{ color: "var(--ink-soft)" }}>{formatDateBR(t.date)}</div>
                         <div className="w-24 shrink-0 flex justify-start">{statusBtn}</div>
-                        <div className="rz-mono text-sm font-semibold w-28 text-right shrink-0" style={{ color: t.type === "receita" ? "var(--emerald)" : "var(--brick)" }}>
-                          {t.type === "receita" ? "+ " : "− "}{formatCurrency(t.amount)}
+                        <div className="rz-mono text-sm font-semibold w-28 text-right shrink-0" style={{ color: corValor }}>
+                          {sinalValor}{formatCurrency(t.amount)}
                         </div>
                         <div className="w-6 shrink-0 flex justify-center">{attachmentBtn}</div>
                         {avatarBadge}
@@ -1568,6 +1596,7 @@ export default function App() {
             <div className="rz-toggle mb-4">
               <button onClick={() => handleTypeChange("receita")} className={form.type === "receita" ? "receita-on" : "off"}>Receita</button>
               <button onClick={() => handleTypeChange("despesa")} className={form.type === "despesa" ? "despesa-on" : "off"}>Despesa</button>
+              <button onClick={() => handleTypeChange("transferencia")} className={form.type === "transferencia" ? "transferencia-on" : "off"}>Transferência</button>
             </div>
 
             <div className="flex flex-col gap-3">
@@ -1626,30 +1655,63 @@ export default function App() {
                 </div>
               )}
 
-              <div>
-                <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Categoria</label>
-                <select className="rz-input rz-focus" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
-                  <option value="" disabled>Selecione</option>
-                  {categoriesByType[form.type].map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
-                </select>
-              </div>
+              {form.type !== "transferencia" && (
+                <div>
+                  <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Categoria</label>
+                  <select className="rz-input rz-focus" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
+                    <option value="" disabled>Selecione</option>
+                    {categoriesByType[form.type].map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+                  </select>
+                </div>
+              )}
 
-              <div className="flex gap-3">
-                <div className="flex-1">
-                  <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Banco / Conta (opcional)</label>
-                  <select className="rz-input rz-focus" value={form.account} onChange={(e) => setForm({ ...form, account: e.target.value })}>
-                    <option value="">Nenhum selecionado</option>
-                    {banksList.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
-                  </select>
+              {form.type === "transferencia" ? (
+                <>
+                  <div className="flex gap-3">
+                    <div className="flex-1">
+                      <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>De (origem)</label>
+                      <select className="rz-input rz-focus" value={form.account} onChange={(e) => setForm({ ...form, account: e.target.value })}>
+                        <option value="" disabled>Selecione</option>
+                        {banksList.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
+                      </select>
+                    </div>
+                    <div className="flex-1">
+                      <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Para (destino)</label>
+                      <select className="rz-input rz-focus" value={form.toAccount} onChange={(e) => setForm({ ...form, toAccount: e.target.value })}>
+                        <option value="" disabled>Selecione</option>
+                        {banksList.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Status</label>
+                    <select className="rz-input rz-focus" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
+                      <option value="pago">Concluída</option>
+                      <option value="pendente">Pendente</option>
+                    </select>
+                  </div>
+                  <p className="text-xs -mt-1" style={{ color: "var(--ink-soft)" }}>
+                    Transferências só movem dinheiro entre suas contas — não contam como receita nem despesa nos relatórios.
+                  </p>
+                </>
+              ) : (
+                <div className="flex gap-3">
+                  <div className="flex-1">
+                    <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Banco / Conta (opcional)</label>
+                    <select className="rz-input rz-focus" value={form.account} onChange={(e) => setForm({ ...form, account: e.target.value })}>
+                      <option value="">Nenhum selecionado</option>
+                      {banksList.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
+                    </select>
+                  </div>
+                  <div className="flex-1">
+                    <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Status</label>
+                    <select className="rz-input rz-focus" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
+                      <option value="pago">Pago</option>
+                      <option value="pendente">Pendente</option>
+                    </select>
+                  </div>
                 </div>
-                <div className="flex-1">
-                  <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Status</label>
-                  <select className="rz-input rz-focus" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
-                    <option value="pago">Pago</option>
-                    <option value="pendente">Pendente</option>
-                  </select>
-                </div>
-              </div>
+              )}
 
               <div>
                 <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Comprovante / nota fiscal (opcional)</label>
@@ -3034,19 +3096,31 @@ function CsvImportModal({ categoriesByType, banksList, onConfirm, onCancel }) {
 }
 
 function CarteiraTab({ transactions, banksList, setActiveTab }) {
+  // Efeito de um lançamento sobre uma conta específica:
+  // receita entra, despesa sai, transferência sai da origem e entra no destino.
+  const efeitoNaConta = (t, contaId) => {
+    if (t.type === "transferencia") {
+      if (t.account === contaId) return -t.amount;
+      if (t.toAccount === contaId) return t.amount;
+      return 0;
+    }
+    if (t.account !== contaId) return 0;
+    return t.type === "receita" ? t.amount : -t.amount;
+  };
+
   const saldoPorConta = useMemo(() => {
     return banksList.map((c) => {
-      const daConta = transactions.filter((t) => t.account === c.id);
+      const daConta = transactions.filter((t) => t.account === c.id || t.toAccount === c.id);
       const saldo = daConta.filter((t) => t.status === "pago")
-        .reduce((s, t) => s + (t.type === "receita" ? t.amount : -t.amount), 0);
+        .reduce((s, t) => s + efeitoNaConta(t, c.id), 0);
       const pendente = daConta.filter((t) => t.status === "pendente")
-        .reduce((s, t) => s + (t.type === "receita" ? t.amount : -t.amount), 0);
+        .reduce((s, t) => s + efeitoNaConta(t, c.id), 0);
       return { ...c, saldo, pendente, movimentos: daConta.length };
     });
   }, [banksList, transactions]);
 
   const semConta = useMemo(() => {
-    const sem = transactions.filter((t) => !t.account);
+    const sem = transactions.filter((t) => !t.account && t.type !== "transferencia");
     return {
       saldo: sem.filter((t) => t.status === "pago").reduce((s, t) => s + (t.type === "receita" ? t.amount : -t.amount), 0),
       pendente: sem.filter((t) => t.status === "pendente").reduce((s, t) => s + (t.type === "receita" ? t.amount : -t.amount), 0),
@@ -3243,7 +3317,8 @@ function SavingsCard({ account, onDelete, onContribute, onDeleteHistoryEntry }) 
 
 function VisaoGeralTab({ transactions, periodFiltered, totals, refDate, periodMode, shiftMonth, setPeriodMode, findCategory, setActiveTab, fixedBills, findBank, onLaunchFixedBill, savingsAccounts }) {
   const saldoTotal = useMemo(
-    () => transactions.filter((t) => t.status === "pago").reduce((s, t) => s + (t.type === "receita" ? t.amount : -t.amount), 0),
+    () => transactions.filter((t) => t.status === "pago" && t.type !== "transferencia")
+      .reduce((s, t) => s + (t.type === "receita" ? t.amount : -t.amount), 0),
     [transactions]
   );
 
@@ -3256,7 +3331,7 @@ function VisaoGeralTab({ transactions, periodFiltered, totals, refDate, periodMo
       ? new Date(8640000000000000)
       : new Date(refDate.getFullYear(), refDate.getMonth() + 1, 0, 23, 59, 59);
     const pendentes = transactions
-      .filter((t) => t.status === "pendente" && new Date(t.date + "T00:00:00") <= endOfPeriod)
+      .filter((t) => t.status === "pendente" && t.type !== "transferencia" && new Date(t.date + "T00:00:00") <= endOfPeriod)
       .reduce((s, t) => s + (t.type === "receita" ? t.amount : -t.amount), 0);
     const fixasNaoLancadas = periodMode === "todos" ? 0 : enrichFixedBills(fixedBills, transactions, refDate)
       .filter((b) => b.active && b.status !== "lancada")
@@ -3278,7 +3353,7 @@ function VisaoGeralTab({ transactions, periodFiltered, totals, refDate, periodMo
     return months.map((d) => {
       const endOfMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59);
       const saldo = transactions
-        .filter((t) => t.status === "pago" && new Date(t.date + "T00:00:00") <= endOfMonth)
+        .filter((t) => t.status === "pago" && t.type !== "transferencia" && new Date(t.date + "T00:00:00") <= endOfMonth)
         .reduce((s, t) => s + (t.type === "receita" ? t.amount : -t.amount), 0);
       return { mes: `${MONTHS[d.getMonth()].slice(0, 3)}/${String(d.getFullYear()).slice(2)}`, saldo };
     });

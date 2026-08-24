@@ -58,9 +58,10 @@
         .rz-btn-ghost:hover { background: var(--paper-alt); }
 
         .rz-toggle { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; display: flex; }
-        .rz-toggle button { flex: 1; padding: 8px 0; font-weight: 600; font-size: 0.875rem; }
+        .rz-toggle button { flex: 1; padding: 8px 4px; font-weight: 600; font-size: 0.8rem; white-space: nowrap; }
         .rz-toggle .receita-on { background: var(--emerald); color: #fff; }
         .rz-toggle .despesa-on { background: var(--brick); color: #fff; }
+        .rz-toggle .transferencia-on { background: var(--ink-soft); color: var(--paper); }
         .rz-toggle .off { background: var(--surface); color: var(--ink-soft); }
 
         .rz-stamp {
