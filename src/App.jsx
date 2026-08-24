@@ -1050,7 +1050,7 @@ export default function App() {
     >
 
       {/* ---------------- Sidebar ---------------- */}
-      <aside className="rz-sidebar md:w-60 md:min-h-screen flex flex-col shrink-0">
+      <aside className="rz-sidebar md:w-60 md:h-screen md:sticky md:top-0 flex flex-col shrink-0 md:overflow-y-auto">
         <div className="flex items-center justify-between p-4 md:p-5">
           <div className="flex items-center gap-2">
             <BookOpen size={22} color="#EEF1E7" strokeWidth={1.75} />
@@ -1082,12 +1082,13 @@ export default function App() {
           })}
         </nav>
 
-        <div className={`${mobileNavOpen ? "flex" : "hidden"} md:flex flex-col gap-2 p-4 mt-auto`}>
-          <button onClick={() => supabase.auth.signOut()} className="text-[11px] rz-focus flex items-center gap-1.5" style={{ color: "#C7D3C9" }}>
-            <LogOut size={12} /> Sair da conta
-          </button>
-          <button onClick={resetAllData} className="text-[11px] rz-focus" style={{ color: "#7A8C7D" }}>
-            Limpar todos os dados
+        <div className={`${mobileNavOpen ? "flex" : "hidden"} md:flex flex-col gap-1 p-3 mt-auto`} style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+          <button
+            onClick={() => supabase.auth.signOut()}
+            className="rz-nav-item rz-focus flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-left"
+          >
+            <LogOut size={17} strokeWidth={1.75} />
+            <span className="flex-1">Sair da conta</span>
           </button>
         </div>
       </aside>
@@ -1150,6 +1151,7 @@ export default function App() {
             onExportBackup={handleExportBackup}
             onImportBackup={handleImportBackup}
             backupMessage={backupMessage}
+            onResetData={resetAllData}
           />
         ) : activeTab === "relatorios" ? (
           <ReportsTab transactions={transactions} findCategory={findCategory} fixedBills={fixedBills} savingsAccounts={savingsAccounts} />
@@ -1571,7 +1573,7 @@ function ConfiguracoesTab({
   onAddCategory, onDeleteCategory, hiddenCategoriesCount, onRestoreCategories,
   banksList, customBanks, bankForm, setBankForm, bankError,
   onAddBank, onDeleteBank, hiddenBanksCount, onRestoreBanks,
-  onExportBackup, onImportBackup, backupMessage,
+  onExportBackup, onImportBackup, backupMessage, onResetData,
 }) {
   const [subTab, setSubTab] = useState("tema");
   const SUB_TABS = [
@@ -1641,7 +1643,7 @@ function ConfiguracoesTab({
 
       {subTab === "familia" && <HouseholdSection />}
 
-      {subTab === "conta-usuario" && <ContaSection />}
+      {subTab === "conta-usuario" && <ContaSection onResetData={onResetData} />}
     </div>
   );
 }
@@ -1650,8 +1652,8 @@ function BackupSection({ onExport, onImport, message }) {
   const fileInputRef = useRef(null);
 
   return (
-    <div className="max-w-xl mx-auto">
-      <div className="rz-card p-5 mb-6">
+    <div className="grid lg:grid-cols-2 gap-6">
+      <div className="rz-card p-5">
         <h2 className="text-sm font-semibold mb-1">Baixar backup</h2>
         <p className="text-xs mb-4" style={{ color: "var(--ink-soft)" }}>
           Baixa um arquivo com todos os seus dados: lançamentos, categorias, contas fixas, orçamento, metas e poupança.
@@ -1730,39 +1732,41 @@ function HouseholdSection() {
   };
 
   return (
-    <div className="max-w-xl mx-auto flex flex-col gap-6">
-      <div className="rz-card p-5">
-        <div className="flex items-center gap-2 mb-1">
-          <Users size={16} style={{ color: "var(--ink-soft)" }} />
-          <h2 className="text-sm font-semibold">Convidar alguém da família</h2>
+    <div>
+      <div className="grid lg:grid-cols-2 gap-6 mb-4">
+        <div className="rz-card p-5">
+          <div className="flex items-center gap-2 mb-1">
+            <Users size={16} style={{ color: "var(--ink-soft)" }} />
+            <h2 className="text-sm font-semibold">Convidar alguém da família</h2>
+          </div>
+          <p className="text-xs mb-4" style={{ color: "var(--ink-soft)" }}>
+            Gere um código e compartilhe com quem você quer que veja e edite os mesmos dados financeiros que você.
+          </p>
+          <button onClick={handleGenerateCode} disabled={loading} className="rz-btn-primary rz-focus text-sm disabled:opacity-60">
+            {loading && !code ? "Gerando…" : "Gerar código de convite"}
+          </button>
+          {code && (
+            <div className="flex items-center gap-2 mt-4">
+              <span className="rz-mono text-lg font-semibold px-4 py-2 rounded-lg" style={{ background: "var(--paper-alt)", letterSpacing: "0.1em" }}>{code}</span>
+              <button onClick={handleCopy} className="rz-btn-ghost rz-focus text-xs !py-2 flex items-center gap-1.5">
+                <Copy size={13} /> {copied ? "Copiado!" : "Copiar"}
+              </button>
+            </div>
+          )}
+          {code && <p className="text-xs mt-2" style={{ color: "var(--ink-soft)" }}>Válido por 7 dias, uso único.</p>}
         </div>
-        <p className="text-xs mb-4" style={{ color: "var(--ink-soft)" }}>
-          Gere um código e compartilhe com quem você quer que veja e edite os mesmos dados financeiros que você.
-        </p>
-        <button onClick={handleGenerateCode} disabled={loading} className="rz-btn-primary rz-focus text-sm disabled:opacity-60">
-          {loading && !code ? "Gerando…" : "Gerar código de convite"}
-        </button>
-        {code && (
-          <div className="flex items-center gap-2 mt-4">
-            <span className="rz-mono text-lg font-semibold px-4 py-2 rounded-lg" style={{ background: "var(--paper-alt)", letterSpacing: "0.1em" }}>{code}</span>
-            <button onClick={handleCopy} className="rz-btn-ghost rz-focus text-xs !py-2 flex items-center gap-1.5">
-              <Copy size={13} /> {copied ? "Copiado!" : "Copiar"}
+
+        <div className="rz-card p-5" style={{ alignSelf: "start" }}>
+          <h2 className="text-sm font-semibold mb-1">Entrar em uma família existente</h2>
+          <p className="text-xs mb-4" style={{ color: "var(--ink-soft)" }}>
+            Recebeu um código de alguém? Cole abaixo. <strong>Atenção:</strong> os dados que você já tem serão somados aos da família de destino.
+          </p>
+          <div className="flex gap-2">
+            <input className="rz-input rz-focus rz-mono" placeholder="CÓDIGO" value={joinCode} onChange={(e) => setJoinCode(e.target.value.toUpperCase())} />
+            <button onClick={handleJoin} disabled={loading} className="rz-btn-primary rz-focus text-sm whitespace-nowrap disabled:opacity-60">
+              Entrar
             </button>
           </div>
-        )}
-        {code && <p className="text-xs mt-2" style={{ color: "var(--ink-soft)" }}>Válido por 7 dias, uso único.</p>}
-      </div>
-
-      <div className="rz-card p-5">
-        <h2 className="text-sm font-semibold mb-1">Entrar em uma família existente</h2>
-        <p className="text-xs mb-4" style={{ color: "var(--ink-soft)" }}>
-          Recebeu um código de alguém? Cole abaixo. <strong>Atenção:</strong> os dados que você já tem serão somados aos da família de destino.
-        </p>
-        <div className="flex gap-2">
-          <input className="rz-input rz-focus rz-mono" placeholder="CÓDIGO" value={joinCode} onChange={(e) => setJoinCode(e.target.value.toUpperCase())} />
-          <button onClick={handleJoin} disabled={loading} className="rz-btn-primary rz-focus text-sm whitespace-nowrap disabled:opacity-60">
-            Entrar
-          </button>
         </div>
       </div>
 
@@ -1772,7 +1776,7 @@ function HouseholdSection() {
   );
 }
 
-function ContaSection() {
+function ContaSection({ onResetData }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -1803,7 +1807,7 @@ function ContaSection() {
   };
 
   return (
-    <div className="max-w-xl mx-auto">
+    <div>
       <div className="rz-card p-5 mb-6">
         <h2 className="text-sm font-semibold mb-1">Sua conta</h2>
         <p className="text-xs mb-4" style={{ color: "var(--ink-soft)" }}>{email}</p>
@@ -1812,21 +1816,37 @@ function ContaSection() {
         </button>
       </div>
 
-      <div className="rz-card p-5">
-        <h2 className="text-sm font-semibold mb-4">Alterar senha</h2>
-        <div className="flex flex-col gap-3">
-          <div>
-            <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Nova senha</label>
-            <input type="password" autoComplete="new-password" className="rz-input rz-focus" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} />
+      <div className="grid lg:grid-cols-2 gap-6">
+        <div className="rz-card p-5">
+          <h2 className="text-sm font-semibold mb-4">Alterar senha</h2>
+          <div className="flex flex-col gap-3">
+            <div>
+              <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Nova senha</label>
+              <input type="password" autoComplete="new-password" className="rz-input rz-focus" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} />
+            </div>
+            <div>
+              <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Confirmar nova senha</label>
+              <input type="password" autoComplete="new-password" className="rz-input rz-focus" placeholder="••••••••" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+            </div>
+            {error && <div className="text-xs" style={{ color: "var(--brick)" }}>{error}</div>}
+            {success && <div className="text-xs" style={{ color: "var(--emerald)" }}>Senha alterada com sucesso.</div>}
+            <button onClick={handleChangePassword} disabled={loading} className="rz-btn-primary rz-focus text-sm mt-1 disabled:opacity-60">
+              {loading ? "Salvando…" : "Salvar nova senha"}
+            </button>
           </div>
-          <div>
-            <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Confirmar nova senha</label>
-            <input type="password" autoComplete="new-password" className="rz-input rz-focus" placeholder="••••••••" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
-          </div>
-          {error && <div className="text-xs" style={{ color: "var(--brick)" }}>{error}</div>}
-          {success && <div className="text-xs" style={{ color: "var(--emerald)" }}>Senha alterada com sucesso.</div>}
-          <button onClick={handleChangePassword} disabled={loading} className="rz-btn-primary rz-focus text-sm mt-1 disabled:opacity-60">
-            {loading ? "Salvando…" : "Salvar nova senha"}
+        </div>
+
+        <div className="rz-card p-5" style={{ borderColor: "var(--brick)" }}>
+          <h2 className="text-sm font-semibold mb-1" style={{ color: "var(--brick)" }}>Zona de risco</h2>
+          <p className="text-xs mb-4" style={{ color: "var(--ink-soft)" }}>
+            Apaga todos os lançamentos salvos. Essa ação não pode ser desfeita.
+          </p>
+          <button
+            onClick={onResetData}
+            className="rz-btn-ghost rz-focus text-sm"
+            style={{ color: "var(--brick)", borderColor: "var(--brick)" }}
+          >
+            Limpar todos os dados
           </button>
         </div>
       </div>
@@ -1848,8 +1868,8 @@ function TemaSection({ theme, setTheme }) {
   ];
 
   return (
-    <div className="max-w-xl mx-auto">
-      <div className="rz-card p-5 mb-6">
+    <div className="grid lg:grid-cols-2 gap-6">
+      <div className="rz-card p-5">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-semibold">Cores do sistema</h2>
           <button onClick={resetDefault} className="rz-btn-ghost rz-focus text-xs !py-1.5 !px-3 flex items-center gap-1.5">
@@ -1879,7 +1899,7 @@ function TemaSection({ theme, setTheme }) {
         </div>
       </div>
 
-      <div className="rz-card p-5">
+      <div className="rz-card p-5" style={{ alignSelf: "start" }}>
         <h2 className="text-sm font-semibold mb-4">Temas prontos</h2>
         <div className="flex flex-wrap gap-3">
           {THEME_PRESETS.map((preset) => (
@@ -3094,7 +3114,7 @@ function VisaoGeralTab({ transactions, periodFiltered, totals, refDate, periodMo
 
 function BancosTab({ banksList, customBanks, bankForm, setBankForm, bankError, onAdd, onDelete, hiddenCount, onRestore }) {
   return (
-    <div className="max-w-md mx-auto">
+    <div className="max-w-2xl">
       <header className="mb-6">
         <h1 className="rz-display text-2xl md:text-3xl">Contas e Cartões</h1>
         <p className="text-sm mt-1" style={{ color: "var(--ink-soft)" }}>
@@ -3155,7 +3175,7 @@ function BancosTab({ banksList, customBanks, bankForm, setBankForm, bankError, o
 
 function CategoriasTab({ categoriesByType, customCategories, categoryForm, setCategoryForm, categoryError, onAdd, onDelete, hiddenCount, onRestore }) {
   return (
-    <div className="max-w-2xl mx-auto">
+    <div className="max-w-4xl">
       <header className="mb-6 flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="rz-display text-2xl md:text-3xl">Categorias</h1>
