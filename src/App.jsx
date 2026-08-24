@@ -881,14 +881,15 @@ export default function App() {
     }
   };
 
-  const handleUpdateBank = (bank, newLabel, newColor) => {
+  const handleUpdateBank = (bank, newLabel, newColor, extra = {}) => {
     const label = newLabel.trim();
     if (!label) return;
     const isCustom = customBanks.some((b) => b.id === bank.id);
+    const patch = { label, color: newColor, ...extra };
     if (isCustom) {
-      setCustomBanks((prev) => prev.map((b) => (b.id === bank.id ? { ...b, label, color: newColor } : b)));
+      setCustomBanks((prev) => prev.map((b) => (b.id === bank.id ? { ...b, ...patch } : b)));
     } else {
-      setCustomBanks((prev) => [...prev, { ...bank, label, color: newColor }]);
+      setCustomBanks((prev) => [...prev, { ...bank, ...patch }]);
       setHiddenDefaultBanks((prev) => [...prev, bank.id]);
     }
   };
@@ -1357,34 +1358,38 @@ export default function App() {
               <SummaryCard label="Saldo do período" value={totals.saldo} icon={Scale} tone={totals.saldo >= 0 ? "emerald" : "brick"} />
             </div>
 
-            {/* Filters + Add button */}
-            <div className="flex flex-col md:flex-row md:items-center gap-2 mb-4">
-              <div className="rz-card flex items-center gap-2 px-3 py-2 flex-1 min-w-[180px]">
+            {/* Busca e filtros */}
+            <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 mb-2">
+              <div className="rz-card flex items-center gap-2 px-3 py-2 flex-1 sm:min-w-[220px]">
                 <Search size={15} style={{ color: "var(--ink-soft)" }} />
                 <input
-                  className="flex-1 outline-none text-sm"
-                  style={{ background: "transparent" }}
+                  className="flex-1 outline-none text-sm min-w-0"
+                  style={{ background: "transparent", color: "var(--ink)" }}
                   placeholder="Buscar por descrição…"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                 />
               </div>
-              <select className="rz-input text-sm md:w-auto" value={typeFilter} onChange={(e) => { setTypeFilter(e.target.value); setCategoryFilter("todas"); }}>
+              <select className="rz-input text-sm sm:w-auto" value={typeFilter} onChange={(e) => { setTypeFilter(e.target.value); setCategoryFilter("todas"); }}>
                 <option value="todos">Todos os tipos</option>
                 <option value="receita">Receitas</option>
                 <option value="despesa">Despesas</option>
               </select>
-              <select className="rz-input text-sm md:w-auto" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
+              <select className="rz-input text-sm sm:w-auto" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
                 <option value="todas">Todas as categorias</option>
                 {(typeFilter === "todos" ? [...categoriesByType.receita, ...categoriesByType.despesa] : categoriesByType[typeFilter]).map((c) => (
                   <option key={c.id} value={c.id}>{c.label}</option>
                 ))}
               </select>
-              <select className="rz-input text-sm md:w-auto" value={accountFilter} onChange={(e) => setAccountFilter(e.target.value)}>
+              <select className="rz-input text-sm sm:w-auto" value={accountFilter} onChange={(e) => setAccountFilter(e.target.value)}>
                 <option value="todas">Todas as contas</option>
                 <option value="sem">Sem conta definida</option>
                 {banksList.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
               </select>
+            </div>
+
+            {/* Ações */}
+            <div className="flex flex-wrap gap-2 mb-4">
               <button
                 onClick={() => handleExportTransactions(visibleTransactions, `razao-lancamentos-${todayISO()}.csv`)}
                 className="rz-btn-ghost rz-focus flex items-center justify-center gap-2 text-sm whitespace-nowrap"
@@ -1395,7 +1400,7 @@ export default function App() {
               <button onClick={() => setShowCsvImport(true)} className="rz-btn-ghost rz-focus flex items-center justify-center gap-2 text-sm whitespace-nowrap">
                 <FileUp size={16} /> Importar CSV
               </button>
-              <button onClick={openNewForm} className="rz-btn-primary rz-focus flex items-center justify-center gap-2 text-sm whitespace-nowrap">
+              <button onClick={openNewForm} className="rz-btn-primary rz-focus flex items-center justify-center gap-2 text-sm whitespace-nowrap sm:ml-auto">
                 <Plus size={16} /> Novo lançamento
               </button>
             </div>
@@ -3024,16 +3029,29 @@ function CarteiraTab({ transactions, banksList, refDate, shiftMonth, findCategor
   const totalContas = saldoPorConta.reduce((s, c) => s + c.saldo, 0) + semConta;
 
   // Fatura do cartão: despesas daquele cartão no mês selecionado
+  // A fatura de um mês vai do dia seguinte ao fechamento do mês anterior até o
+  // dia do fechamento deste mês. Sem dia de fechamento definido, usa o mês cheio.
   const faturas = useMemo(() => {
     const y = refDate.getFullYear(), m = refDate.getMonth();
     return cartoes.map((c) => {
+      let inicio, fim;
+      if (c.closingDay) {
+        const diasMesAnterior = new Date(y, m, 0).getDate();
+        const diasMesAtual = new Date(y, m + 1, 0).getDate();
+        const fechAnterior = new Date(y, m - 1, Math.min(c.closingDay, diasMesAnterior));
+        inicio = new Date(fechAnterior.getFullYear(), fechAnterior.getMonth(), fechAnterior.getDate() + 1);
+        fim = new Date(y, m, Math.min(c.closingDay, diasMesAtual));
+      } else {
+        inicio = new Date(y, m, 1);
+        fim = new Date(y, m + 1, 0);
+      }
       const itens = transactions.filter((t) => {
         if (t.account !== c.id || t.type !== "despesa") return false;
         const d = new Date(t.date + "T00:00:00");
-        return d.getFullYear() === y && d.getMonth() === m;
+        return d >= inicio && d <= fim;
       }).sort((a, b) => (a.date < b.date ? 1 : -1));
       const total = itens.reduce((s, t) => s + t.amount, 0);
-      return { ...c, itens, total };
+      return { ...c, itens, total, inicio, fim };
     });
   }, [cartoes, transactions, refDate]);
 
@@ -3113,9 +3131,17 @@ function FaturaCard({ fatura, findCategory }) {
         <span className="rz-mono text-lg font-semibold whitespace-nowrap" style={{ color: "var(--brick)" }}>{formatCurrency(fatura.total)}</span>
       </div>
       <p className="text-xs mb-3" style={{ color: "var(--ink-soft)" }}>
-        {fatura.itens.length} lançamento{fatura.itens.length !== 1 ? "s" : ""} neste mês
-        {fatura.closingDay ? ` · fecha dia ${fatura.closingDay}` : ""}
+        {fatura.itens.length} lançamento{fatura.itens.length !== 1 ? "s" : ""}
+        {fatura.closingDay
+          ? ` · ciclo de ${formatDateBR(dateToISO(fatura.inicio))} a ${formatDateBR(dateToISO(fatura.fim))}`
+          : " neste mês"}
       </p>
+
+      {!fatura.closingDay && (
+        <p className="text-xs mb-3 px-3 py-2 rounded-lg" style={{ background: "var(--paper-alt)", color: "var(--ink-soft)" }}>
+          Sem dia de fechamento definido — a fatura está usando o mês do calendário. Ajuste em Configurações → Contas e Cartões.
+        </p>
+      )}
 
       {fatura.itens.length > 0 && (
         <>
@@ -3575,7 +3601,7 @@ function BancosTab({ banksList, customBanks, bankForm, setBankForm, bankError, o
       </div>
       <div className="rz-card overflow-hidden">
         {banksList.map((b, i) => (
-          <CategoryRow key={b.id} cat={b} isFirst={i === 0} isCustom={customBanks.some((x) => x.id === b.id)} onDelete={onDelete} onUpdate={onUpdate} />
+          <CategoryRow key={b.id} cat={b} isFirst={i === 0} isCustom={customBanks.some((x) => x.id === b.id)} onDelete={onDelete} onUpdate={onUpdate} isBank />
         ))}
       </div>
       <p className="text-xs mt-4" style={{ color: "var(--ink-soft)" }}>
@@ -3668,13 +3694,26 @@ function CategoriasTab({ categoriesByType, customCategories, categoryForm, setCa
   );
 }
 
-function CategoryRow({ cat, isFirst, isCustom, onDelete, onUpdate }) {
+function CategoryRow({ cat, isFirst, isCustom, onDelete, onUpdate, isBank }) {
   const [editing, setEditing] = useState(false);
   const [tempLabel, setTempLabel] = useState(cat.label);
   const [tempColor, setTempColor] = useState(cat.color);
+  const [tempKind, setTempKind] = useState(cat.kind || "conta");
+  const [tempClosing, setTempClosing] = useState(cat.closingDay ? String(cat.closingDay) : "");
 
-  const startEdit = () => { setTempLabel(cat.label); setTempColor(cat.color); setEditing(true); };
-  const save = () => { if (tempLabel.trim()) { onUpdate(cat, tempLabel, tempColor); setEditing(false); } };
+  const startEdit = () => {
+    setTempLabel(cat.label); setTempColor(cat.color);
+    setTempKind(cat.kind || "conta"); setTempClosing(cat.closingDay ? String(cat.closingDay) : "");
+    setEditing(true);
+  };
+  const save = () => {
+    if (!tempLabel.trim()) return;
+    const extra = isBank
+      ? { kind: tempKind, closingDay: tempKind === "cartao" ? (parseInt(tempClosing, 10) || null) : null }
+      : {};
+    onUpdate(cat, tempLabel, tempColor, extra);
+    setEditing(false);
+  };
 
   if (editing) {
     return (
@@ -3701,6 +3740,37 @@ function CategoryRow({ cat, isFirst, isCustom, onDelete, onUpdate }) {
             />
           ))}
         </div>
+        {isBank && (
+          <div className="flex items-center gap-4 mt-3 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setTempKind(tempKind === "cartao" ? "conta" : "cartao")}
+              className="rz-focus flex items-center gap-2 text-sm"
+            >
+              <span style={{
+                width: 15, height: 15, borderRadius: 4, border: "1.5px solid var(--line)",
+                background: tempKind === "cartao" ? "var(--ink)" : "var(--surface)",
+                display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+              }}>
+                {tempKind === "cartao" && <Check size={11} color="var(--paper)" />}
+              </span>
+              Cartão de crédito
+            </button>
+            {tempKind === "cartao" && (
+              <div className="flex items-center gap-2">
+                <label className="text-xs" style={{ color: "var(--ink-soft)" }}>Fecha dia</label>
+                <input
+                  type="number" min="1" max="31"
+                  className="rz-input rz-focus rz-mono text-sm"
+                  style={{ width: 68 }}
+                  placeholder="--"
+                  value={tempClosing}
+                  onChange={(e) => setTempClosing(e.target.value)}
+                />
+              </div>
+            )}
+          </div>
+        )}
       </div>
     );
   }
@@ -3709,6 +3779,11 @@ function CategoryRow({ cat, isFirst, isCustom, onDelete, onUpdate }) {
     <div className="flex items-center gap-2 px-3 py-2.5" style={{ borderTop: isFirst ? "none" : "1px solid var(--line)" }}>
       <span className="rz-dot" style={{ background: cat.color }} />
       <span className="text-sm flex-1 truncate">{cat.label}</span>
+      {isBank && cat.kind === "cartao" && (
+        <span className="rz-mono text-[9px] px-1.5 py-0.5 rounded" style={{ background: "var(--paper-alt)", color: "var(--ink-soft)" }}>
+          CARTÃO{cat.closingDay ? ` · DIA ${cat.closingDay}` : ""}
+        </span>
+      )}
       {!isCustom && <span className="rz-mono text-[9px] opacity-50">PADRÃO</span>}
       {onUpdate && (
         <button onClick={startEdit} className="rz-focus p-1 rounded-md" aria-label="Editar" style={{ color: "var(--ink-soft)" }}>
