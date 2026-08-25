@@ -49,10 +49,9 @@ const NAV_ITEMS = [
   { id: "visao-geral", label: "Visão Geral", icon: Home, ready: true },
   { id: "lancamentos", label: "Lançamentos", icon: Receipt, ready: true },
   { id: "fixas", label: "Contas Fixas", icon: Repeat, ready: true },
-  { id: "poupanca", label: "Poupança", icon: Landmark, ready: true },
+  { id: "poupanca", label: "Caixinhas", icon: PiggyBank, ready: true },
   { id: "carteira", label: "Contas", icon: Wallet, ready: true },
   { id: "orcamento", label: "Orçamento", icon: Target, ready: true },
-  { id: "metas", label: "Metas", icon: PiggyBank, ready: true },
   { id: "dividas", label: "Dívidas", icon: HandCoins, ready: true },
   { id: "relatorios", label: "Relatórios", icon: BarChart3, ready: true },
   { id: "config", label: "Configurações", icon: Settings, ready: true },
@@ -202,7 +201,6 @@ function addMonthsToDateISO(dateISO, months) {
   return dateToISO(target);
 }
 const emptyFixedForm = { description: "", amount: "", type: "despesa", category: "", account: "", dueDay: "5" };
-const emptyGoalForm = { title: "", targetAmount: "", deadline: "", color: COLOR_PALETTE[0], linkedSavingsId: "" };
 const emptyDebtForm = { person: "", amount: "", direction: "emprestei", date: todayISO(), dueDate: "", notes: "", interestRate: "" };
 
 const DEFAULT_THEME = { paper: "#eef1e7", ink: "#1e2b23", emerald: "#1b5e4f", brick: "#a83b2e", gold: "#b8873a" };
@@ -381,12 +379,6 @@ export default function App() {
   const [budgetForm, setBudgetForm] = useState({ categoryId: "", limit: "" });
   const [budgetError, setBudgetError] = useState("");
 
-  const [goals, setGoals] = useState([]);
-  const [goalsLoaded, setGoalsLoaded] = useState(false);
-  const [goalForm, setGoalForm] = useState(emptyGoalForm);
-  const [showGoalForm, setShowGoalForm] = useState(false);
-  const [editingGoalId, setEditingGoalId] = useState(null);
-  const [goalError, setGoalError] = useState("");
 
   const [form, setForm] = useState(emptyForm);
   const [showForm, setShowForm] = useState(false);
@@ -583,18 +575,60 @@ export default function App() {
     })();
   }, [fixedBills, fixedBillsLoaded]);
 
-  // ---------- Load savings accounts (semeia categorias padrão na primeira vez) ----------
+  // ---------- Load caixinhas (migra metas antigas para dentro da poupança) ----------
   useEffect(() => {
     (async () => {
+      const normaliza = (c, i) => ({
+        targetAmount: null, deadline: "", monthlyPlan: null, archived: false, order: i,
+        ...c,
+        currentAmount: c.currentAmount || 0,
+        history: c.history || [],
+      });
+
       try {
-        const res = await storage.get("poupanca", false);
-        if (res && res.value) {
-          setSavingsAccounts(JSON.parse(res.value));
-        } else {
-          setSavingsAccounts(DEFAULT_SAVINGS_SEED.map((s) => ({ id: uid(), ...s, currentAmount: 0, history: [] })));
+        let caixinhas = [];
+        try {
+          const res = await storage.get("poupanca", false);
+          if (res && res.value) caixinhas = JSON.parse(res.value);
+        } catch (e) { /* ainda não existe */ }
+
+        let jaMigrou = false;
+        try {
+          const flag = await storage.get("metas_migradas", false);
+          jaMigrou = !!(flag && flag.value);
+        } catch (e) { /* ainda não migrou */ }
+
+        if (!jaMigrou) {
+          let metas = [];
+          try {
+            const m = await storage.get("metas", false);
+            if (m && m.value) metas = JSON.parse(m.value);
+          } catch (e) { /* não havia metas */ }
+
+          metas.forEach((g) => {
+            const vinculada = g.linkedSavingsId ? caixinhas.find((c) => c.id === g.linkedSavingsId) : null;
+            if (vinculada) {
+              // Meta que já apontava para uma poupança: funde as duas
+              vinculada.targetAmount = g.targetAmount;
+              vinculada.deadline = g.deadline || "";
+            } else {
+              caixinhas.push({
+                id: g.id, label: g.title, color: g.color,
+                currentAmount: g.currentAmount || 0, history: g.history || [],
+                targetAmount: g.targetAmount, deadline: g.deadline || "",
+                monthlyPlan: null, archived: false,
+              });
+            }
+          });
+          try { await storage.set("metas_migradas", "true", false); } catch (e) { /* segue mesmo assim */ }
         }
+
+        if (caixinhas.length === 0) {
+          caixinhas = DEFAULT_SAVINGS_SEED.map((s) => ({ id: uid(), ...s, currentAmount: 0, history: [] }));
+        }
+        setSavingsAccounts(caixinhas.map(normaliza));
       } catch (e) {
-        setSavingsAccounts(DEFAULT_SAVINGS_SEED.map((s) => ({ id: uid(), ...s, currentAmount: 0, history: [] })));
+        setSavingsAccounts(DEFAULT_SAVINGS_SEED.map((s, i) => normaliza({ id: uid(), ...s }, i)));
       } finally {
         setSavingsLoaded(true);
       }
@@ -638,32 +672,6 @@ export default function App() {
       }
     })();
   }, [budgets, budgetsLoaded]);
-
-  // ---------- Load goals ----------
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await storage.get("metas", false);
-        setGoals(res && res.value ? JSON.parse(res.value) : []);
-      } catch (e) {
-        setGoals([]);
-      } finally {
-        setGoalsLoaded(true);
-      }
-    })();
-  }, []);
-
-  // ---------- Save goals ----------
-  useEffect(() => {
-    if (!goalsLoaded) return;
-    (async () => {
-      try {
-        await storage.set("metas", JSON.stringify(goals), false);
-      } catch (e) {
-        setLoadError(true);
-      }
-    })();
-  }, [goals, goalsLoaded]);
 
   // ---------- Load/save dívidas ----------
   useEffect(() => {
@@ -1162,11 +1170,54 @@ export default function App() {
     setTransactions((prev) => prev.filter((t) => !(t.recurringId === bill.id && t.recurringPeriod === period)));
   };
 
+  const handleUpdateSavingsBox = (id, patch) => {
+    setSavingsAccounts((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+  };
+
+  const handleArchiveSavings = (id) => {
+    setSavingsAccounts((prev) => prev.map((s) => (s.id === id ? { ...s, archived: !s.archived } : s)));
+  };
+
+  const handleMoveSavings = (id, direcao) => {
+    setSavingsAccounts((prev) => {
+      const ativas = prev.filter((s) => !s.archived).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+      const idx = ativas.findIndex((s) => s.id === id);
+      const alvo = idx + direcao;
+      if (idx < 0 || alvo < 0 || alvo >= ativas.length) return prev;
+      [ativas[idx], ativas[alvo]] = [ativas[alvo], ativas[idx]];
+      const novaOrdem = {};
+      ativas.forEach((s, i) => { novaOrdem[s.id] = i; });
+      return prev.map((s) => (novaOrdem[s.id] !== undefined ? { ...s, order: novaOrdem[s.id] } : s));
+    });
+  };
+
+  const handleTransferSavings = (origemId, destinoId, valor) => {
+    if (!origemId || !destinoId || origemId === destinoId || !valor || valor <= 0) return;
+    const hoje = todayISO();
+    const origem = savingsAccounts.find((s) => s.id === origemId);
+    const destino = savingsAccounts.find((s) => s.id === destinoId);
+    if (!origem || !destino) return;
+    const real = Math.min(valor, origem.currentAmount);
+    if (real <= 0) return;
+    setSavingsAccounts((prev) => prev.map((s) => {
+      if (s.id === origemId) {
+        return { ...s, currentAmount: s.currentAmount - real,
+          history: [...(s.history || []), { id: uid(), date: hoje, amount: -real, note: `para ${destino.label}` }] };
+      }
+      if (s.id === destinoId) {
+        return { ...s, currentAmount: s.currentAmount + real,
+          history: [...(s.history || []), { id: uid(), date: hoje, amount: real, note: `de ${origem.label}` }] };
+      }
+      return s;
+    }));
+    setToast({ message: `${formatCurrency(real)} movido de "${origem.label}" para "${destino.label}".` });
+  };
+
   const handleAddSavingsAccount = () => {
     const label = savingsForm.label.trim();
     if (!label) { setSavingsError("Dê um nome para a categoria."); return; }
     if (savingsAccounts.some((s) => s.label.toLowerCase() === label.toLowerCase())) { setSavingsError("Já existe uma categoria de poupança com esse nome."); return; }
-    setSavingsAccounts((prev) => [...prev, { id: uid(), label, color: savingsForm.color, currentAmount: 0, history: [] }]);
+    setSavingsAccounts((prev) => [...prev, { id: uid(), label, color: savingsForm.color, currentAmount: 0, history: [], targetAmount: null, deadline: "", monthlyPlan: null, archived: false, order: prev.length }]);
     setSavingsForm({ label: "", color: COLOR_PALETTE[0] });
     setSavingsError("");
   };
@@ -1207,7 +1258,6 @@ export default function App() {
         bancos_padrao_ocultos: hiddenDefaultBanks,
         contas_fixas: fixedBills,
         orcamentos: budgets,
-        metas: goals,
         poupanca: savingsAccounts,
         dividas: debts,
         tema_cores: theme,
@@ -1238,7 +1288,6 @@ export default function App() {
         if (d.bancos_padrao_ocultos) setHiddenDefaultBanks(d.bancos_padrao_ocultos);
         if (d.contas_fixas) setFixedBills(d.contas_fixas);
         if (d.orcamentos) setBudgets(d.orcamentos);
-        if (d.metas) setGoals(d.metas);
         if (d.poupanca) setSavingsAccounts(d.poupanca);
         if (d.dividas) setDebts(d.dividas);
         if (d.tema_cores) setTheme(d.tema_cores);
@@ -1283,52 +1332,6 @@ export default function App() {
     setBudgets((prev) => prev.filter((b) => b.id !== budget.id));
   };
 
-  const resetGoalForm = () => { setGoalForm(emptyGoalForm); setEditingGoalId(null); setGoalError(""); };
-  const openNewGoalForm = () => { resetGoalForm(); setShowGoalForm(true); };
-  const openEditGoalForm = (goal) => {
-    setGoalForm({ title: goal.title, targetAmount: String(goal.targetAmount), deadline: goal.deadline || "", color: goal.color, linkedSavingsId: goal.linkedSavingsId || "" });
-    setEditingGoalId(goal.id);
-    setShowGoalForm(true);
-  };
-
-  const handleSubmitGoal = () => {
-    const targetNum = parseFloat(String(goalForm.targetAmount).replace(",", "."));
-    if (!goalForm.title.trim()) { setGoalError("Dê um nome para a meta."); return; }
-    if (!targetNum || targetNum <= 0) { setGoalError("Informe um valor alvo maior que zero."); return; }
-
-    if (editingGoalId) {
-      setGoals((prev) => prev.map((g) => (g.id === editingGoalId ? { ...g, title: goalForm.title.trim(), targetAmount: targetNum, deadline: goalForm.deadline, color: goalForm.color, linkedSavingsId: goalForm.linkedSavingsId } : g)));
-    } else {
-      setGoals((prev) => [...prev, { id: uid(), title: goalForm.title.trim(), targetAmount: targetNum, currentAmount: 0, deadline: goalForm.deadline, color: goalForm.color, linkedSavingsId: goalForm.linkedSavingsId, history: [] }]);
-    }
-    setShowGoalForm(false);
-    resetGoalForm();
-  };
-
-  const handleDeleteGoal = (goal) => {
-    setGoals((prev) => prev.filter((g) => g.id !== goal.id));
-  };
-
-  const handleContributeGoal = (goalId, delta) => {
-    setGoals((prev) => prev.map((g) => (g.id === goalId ? {
-      ...g,
-      currentAmount: Math.max(0, g.currentAmount + delta),
-      history: [...(g.history || []), { id: uid(), date: todayISO(), amount: delta }],
-    } : g)));
-  };
-
-  const handleDeleteGoalHistoryEntry = (goalId, entryId) => {
-    setGoals((prev) => prev.map((g) => {
-      if (g.id !== goalId) return g;
-      const entry = (g.history || []).find((h) => h.id === entryId);
-      if (!entry) return g;
-      return {
-        ...g,
-        currentAmount: Math.max(0, g.currentAmount - entry.amount),
-        history: g.history.filter((h) => h.id !== entryId),
-      };
-    }));
-  };
 
   return (
     <div
@@ -1429,8 +1432,8 @@ export default function App() {
             setActiveTab={setActiveTab}
           />
         ) : activeTab === "poupanca" ? (
-          <PoupancaTab
-            savingsAccounts={savingsAccounts}
+          <CaixinhasTab
+            boxes={savingsAccounts}
             savingsForm={savingsForm}
             setSavingsForm={setSavingsForm}
             savingsError={savingsError}
@@ -1438,6 +1441,10 @@ export default function App() {
             onDelete={handleDeleteSavingsAccount}
             onContribute={handleContributeSavings}
             onDeleteHistoryEntry={handleDeleteSavingsHistoryEntry}
+            onUpdate={handleUpdateSavingsBox}
+            onArchive={handleArchiveSavings}
+            onMove={handleMoveSavings}
+            onTransfer={handleTransferSavings}
           />
         ) : activeTab === "config" ? (
           <ConfiguracoesTab
@@ -1494,25 +1501,6 @@ export default function App() {
             onDelete={handleDeleteBudget}
             onToggleRollover={handleToggleRollover}
             transactions={transactions}
-          />
-        ) : activeTab === "metas" ? (
-          <MetasTab
-            goals={goals}
-            goalForm={goalForm}
-            setGoalForm={setGoalForm}
-            showGoalForm={showGoalForm}
-            setShowGoalForm={setShowGoalForm}
-            editingGoalId={editingGoalId}
-            goalError={goalError}
-            onOpenNew={openNewGoalForm}
-            onOpenEdit={openEditGoalForm}
-            onSubmit={handleSubmitGoal}
-            onDelete={handleDeleteGoal}
-            onCancelForm={() => { setShowGoalForm(false); resetGoalForm(); }}
-            onContribute={handleContributeGoal}
-            onDeleteHistoryEntry={handleDeleteGoalHistoryEntry}
-            savingsAccounts={savingsAccounts}
-            onContributeSavings={handleContributeSavings}
           />
         ) : activeTab === "fixas" ? (
           <FixedBillsTab
@@ -3258,262 +3246,6 @@ function BudgetRow({ budget, spent, category, credito, onUpdateLimit, onDelete, 
   );
 }
 
-function MetasTab({ goals, goalForm, setGoalForm, showGoalForm, editingGoalId, goalError, onOpenNew, onOpenEdit, onSubmit, onDelete, onCancelForm, onContribute, onDeleteHistoryEntry, savingsAccounts, onContributeSavings }) {
-  return (
-    <div>
-      <header className="mb-6 flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="rz-display text-2xl md:text-3xl">Metas</h1>
-          <p className="text-sm mt-1" style={{ color: "var(--ink-soft)" }}>Junte dinheiro para os seus objetivos, um valor de cada vez.</p>
-        </div>
-        <button onClick={onOpenNew} className="rz-btn-primary rz-focus flex items-center gap-2 text-sm whitespace-nowrap">
-          <Plus size={16} /> Nova meta
-        </button>
-      </header>
-
-      {goals.length === 0 ? (
-        <div className="rz-card p-10 text-center">
-          <PiggyBank size={26} className="mx-auto mb-3" style={{ color: "var(--line)" }} />
-          <div className="rz-display text-lg mb-1">Nenhuma meta cadastrada</div>
-          <p className="text-sm mb-4" style={{ color: "var(--ink-soft)" }}>Uma viagem, uma reserva de emergência, o que você quiser juntar.</p>
-          <button onClick={onOpenNew} className="rz-btn-primary rz-focus text-sm inline-flex items-center gap-2">
-            <Plus size={16} /> Criar meta
-          </button>
-        </div>
-      ) : (
-        <div className="grid sm:grid-cols-2 gap-4">
-          {goals.map((g) => <GoalCard key={g.id} goal={g} onEdit={onOpenEdit} onDelete={onDelete} onContribute={onContribute} onDeleteHistoryEntry={onDeleteHistoryEntry} savingsAccounts={savingsAccounts} onContributeSavings={onContributeSavings} />)}
-        </div>
-      )}
-
-      {showGoalForm && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-6" style={{ background: "rgba(30,43,35,0.45)" }}>
-          <div className="rz-card w-full sm:max-w-md p-5 sm:p-6" style={{ borderRadius: "14px 14px 0 0" }}>
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="rz-display text-xl">{editingGoalId ? "Editar meta" : "Nova meta"}</h2>
-              <button onClick={onCancelForm} className="rz-focus" style={{ color: "var(--ink-soft)" }} aria-label="Fechar"><X size={20} /></button>
-            </div>
-            <div className="flex flex-col gap-3">
-              <div>
-                <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Nome da meta</label>
-                <input className="rz-input rz-focus" placeholder="Ex: Viagem, Reserva de emergência…" value={goalForm.title} onChange={(e) => setGoalForm({ ...goalForm, title: e.target.value })} />
-              </div>
-              <div className="flex gap-3">
-                <div className="flex-1">
-                  <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Valor alvo (R$)</label>
-                  <input className="rz-input rz-focus rz-mono" inputMode="decimal" placeholder="0,00" value={goalForm.targetAmount} onChange={(e) => setGoalForm({ ...goalForm, targetAmount: e.target.value })} />
-                </div>
-                <div className="flex-1">
-                  <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Data alvo (opcional)</label>
-                  <input type="date" className="rz-input rz-focus rz-mono" value={goalForm.deadline} onChange={(e) => setGoalForm({ ...goalForm, deadline: e.target.value })} />
-                </div>
-              </div>
-              <div>
-                <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Vincular a uma poupança (opcional)</label>
-                <select className="rz-input rz-focus" value={goalForm.linkedSavingsId} onChange={(e) => setGoalForm({ ...goalForm, linkedSavingsId: e.target.value })}>
-                  <option value="">Controlar valor separadamente</option>
-                  {(savingsAccounts || []).map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
-                </select>
-                <p className="text-xs mt-1" style={{ color: "var(--ink-soft)" }}>
-                  Ao vincular, o progresso da meta passa a ler o saldo dessa poupança — sem precisar lançar o valor duas vezes.
-                </p>
-              </div>
-
-              <div className="flex flex-wrap gap-2">
-                {COLOR_PALETTE.map((color) => (
-                  <button key={color} onClick={() => setGoalForm({ ...goalForm, color })} className="rz-focus w-6 h-6 rounded-full" style={{ background: color, boxShadow: goalForm.color === color ? "0 0 0 2px var(--surface), 0 0 0 4px var(--ink)" : "none" }} aria-label={`Cor ${color}`} />
-                ))}
-              </div>
-              {goalError && <div className="text-xs" style={{ color: "var(--brick)" }}>{goalError}</div>}
-              <div className="flex gap-2 mt-2">
-                <button onClick={onCancelForm} className="rz-btn-ghost rz-focus flex-1 text-sm">Cancelar</button>
-                <button onClick={onSubmit} className="rz-btn-primary rz-focus flex-1 text-sm flex items-center justify-center gap-2"><Check size={16} /> {editingGoalId ? "Salvar alterações" : "Criar meta"}</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function GoalCard({ goal, onEdit, onDelete, onContribute, onDeleteHistoryEntry, savingsAccounts, onContributeSavings }) {
-  const [amount, setAmount] = useState("");
-  const [showHistory, setShowHistory] = useState(false);
-  const [showSim, setShowSim] = useState(false);
-
-  // Se a meta está vinculada a uma poupança, o progresso vem de lá
-  const poupancaVinculada = goal.linkedSavingsId
-    ? (savingsAccounts || []).find((a) => a.id === goal.linkedSavingsId)
-    : null;
-  const vinculada = !!poupancaVinculada;
-
-  const atual = vinculada ? poupancaVinculada.currentAmount : goal.currentAmount;
-  const history = vinculada ? (poupancaVinculada.history || []) : (goal.history || []);
-
-  const pct = goal.targetAmount > 0 ? (atual / goal.targetAmount) * 100 : 0;
-  const done = atual >= goal.targetAmount;
-  const remaining = Math.max(0, goal.targetAmount - atual);
-
-  let monthlySuggestion = null;
-  let deadlinePassed = false;
-  let mesesRestantes = null;
-  if (goal.deadline && !done) {
-    const now = new Date(); now.setHours(0, 0, 0, 0);
-    const deadline = new Date(goal.deadline + "T00:00:00");
-    const diffDays = Math.ceil((deadline - now) / 86400000);
-    if (diffDays <= 0) {
-      deadlinePassed = true;
-    } else {
-      mesesRestantes = Math.max(1, Math.round(diffDays / 30.44));
-      monthlySuggestion = remaining / mesesRestantes;
-    }
-  }
-
-  // Simulador: quanto tempo levaria com um aporte mensal escolhido
-  const [aporteSim, setAporteSim] = useState(0);
-  useEffect(() => {
-    if (monthlySuggestion && aporteSim === 0) setAporteSim(Math.round(monthlySuggestion));
-  }, [monthlySuggestion]);
-
-  const aporteBase = monthlySuggestion || (remaining > 0 ? remaining / 12 : 100);
-  const simMax = Math.max(50, Math.ceil((aporteBase * 3) / 50) * 50);
-  const mesesSim = aporteSim > 0 ? Math.ceil(remaining / aporteSim) : null;
-  const dataSim = mesesSim ? new Date(new Date().getFullYear(), new Date().getMonth() + mesesSim, 1) : null;
-
-  const submitDelta = (sign) => {
-    const num = parseFloat(String(amount).replace(",", "."));
-    if (!num || num <= 0) return;
-    if (vinculada) onContributeSavings(goal.linkedSavingsId, num * sign);
-    else onContribute(goal.id, num * sign);
-    setAmount("");
-  };
-
-  return (
-    <div className="rz-card p-4 sm:p-5">
-      <div className="flex items-start justify-between mb-2 gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="rz-dot" style={{ background: goal.color }} />
-          <span className="text-sm font-medium truncate">{goal.title}</span>
-        </div>
-        <div className="flex items-center gap-1 shrink-0">
-          <button onClick={() => onEdit(goal)} className="rz-focus p-1 rounded-md" aria-label="Editar meta" style={{ color: "var(--ink-soft)" }}><Pencil size={13} /></button>
-          <button onClick={() => onDelete(goal)} className="rz-focus p-1 rounded-md" aria-label="Excluir meta" style={{ color: "var(--ink-soft)" }}><Trash2 size={13} /></button>
-        </div>
-      </div>
-
-      {vinculada && (
-        <div className="text-xs mb-2 inline-flex items-center gap-1.5 px-2 py-1 rounded" style={{ background: "var(--paper-alt)", color: "var(--ink-soft)" }}>
-          <Landmark size={11} /> Vinculada à poupança "{poupancaVinculada.label}"
-        </div>
-      )}
-
-      <div className="flex items-baseline justify-between mb-2">
-        <span className="rz-mono text-lg font-semibold" style={{ color: done ? "var(--emerald)" : "var(--ink)" }}>{formatCurrency(atual)}</span>
-        <span className="rz-mono text-xs" style={{ color: "var(--ink-soft)" }}>de {formatCurrency(goal.targetAmount)}</span>
-      </div>
-
-      <div className="rz-progress-track mb-1">
-        <div className="rz-progress-fill" style={{ width: `${Math.min(pct, 100)}%`, background: done ? "var(--emerald)" : goal.color }} />
-      </div>
-
-      <div className="flex items-center justify-between mb-3">
-        <span className="rz-mono text-[11px]" style={{ color: "var(--ink-soft)" }}>{pct.toFixed(0)}%</span>
-        {goal.deadline && <span className="text-[11px]" style={{ color: "var(--ink-soft)" }}>até {formatDateBR(goal.deadline)}</span>}
-      </div>
-
-      {!done && goal.deadline && (
-        <div className="rounded-lg px-3 py-2 mb-3 text-xs" style={{ background: "var(--paper-alt)", color: deadlinePassed ? "var(--brick)" : "var(--ink-soft)" }}>
-          {deadlinePassed ? (
-            "Prazo da meta já passou — ajuste a data ou dê um empurrão no valor."
-          ) : (
-            <>Economize <span className="rz-mono font-semibold" style={{ color: "var(--ink)" }}>{formatCurrency(monthlySuggestion)}</span>/mês para chegar lá até {formatDateBR(goal.deadline)}</>
-          )}
-        </div>
-      )}
-
-      {done ? (
-        <span className="rz-stamp rz-stamp-pago inline-flex items-center gap-1"><PartyPopper size={11} /> Meta concluída</span>
-      ) : (
-        <>
-          <div className="flex items-center gap-2">
-            <input className="rz-input rz-focus rz-mono text-sm flex-1" inputMode="decimal" placeholder="Valor" value={amount} onChange={(e) => setAmount(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submitDelta(1)} />
-            <button onClick={() => submitDelta(1)} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--emerald)" }} aria-label="Adicionar valor"><Plus size={16} /></button>
-            <button onClick={() => submitDelta(-1)} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--brick)" }} aria-label="Retirar valor"><Minus size={16} /></button>
-          </div>
-
-          <button onClick={() => setShowSim((v) => !v)} className="rz-focus text-xs font-medium mt-3 flex items-center gap-1" style={{ color: "var(--ink-soft)" }}>
-            <Target size={13} /> {showSim ? "Ocultar" : "Simular"} ritmo de economia
-          </button>
-
-          {showSim && (
-            <div className="mt-2 p-3 rounded-lg" style={{ background: "var(--paper-alt)" }}>
-              <div className="flex items-baseline justify-between mb-2">
-                <span className="text-xs" style={{ color: "var(--ink-soft)" }}>Guardando por mês</span>
-                <span className="rz-mono text-sm font-semibold">{formatCurrency(aporteSim)}</span>
-              </div>
-              <input
-                type="range"
-                min="0"
-                max={simMax}
-                step="10"
-                value={aporteSim}
-                onChange={(e) => setAporteSim(Number(e.target.value))}
-                className="w-full rz-focus"
-                style={{ accentColor: goal.color }}
-              />
-              <p className="text-xs mt-2" style={{ color: "var(--ink-soft)" }}>
-                {aporteSim <= 0 ? (
-                  "Escolha um valor para simular."
-                ) : (
-                  <>
-                    Faltam {formatCurrency(remaining)} — nesse ritmo você chega em{" "}
-                    <strong style={{ color: "var(--ink)" }}>
-                      {mesesSim} {mesesSim === 1 ? "mês" : "meses"}
-                    </strong>
-                    {dataSim && `, por volta de ${MONTHS[dataSim.getMonth()].slice(0, 3)}/${dataSim.getFullYear()}`}.
-                    {goal.deadline && !deadlinePassed && mesesRestantes && (
-                      mesesSim <= mesesRestantes
-                        ? <span style={{ color: "var(--emerald)" }}> Dentro do prazo. ✓</span>
-                        : <span style={{ color: "var(--brick)" }}> {mesesSim - mesesRestantes} {mesesSim - mesesRestantes === 1 ? "mês" : "meses"} além do prazo.</span>
-                    )}
-                  </>
-                )}
-              </p>
-            </div>
-          )}
-        </>
-      )}
-
-      {history.length > 0 && (
-        <div className="mt-3 pt-3" style={{ borderTop: "1px solid var(--line)" }}>
-          <button onClick={() => setShowHistory((v) => !v)} className="rz-focus text-xs font-medium flex items-center gap-1" style={{ color: "var(--ink-soft)" }}>
-            <History size={13} /> {showHistory ? "Ocultar" : "Ver"} histórico ({history.length})
-          </button>
-          {showHistory && (
-            <div className="flex flex-col mt-2 max-h-40 overflow-y-auto">
-              {[...history].reverse().map((h) => (
-                <div key={h.id} className="flex items-center gap-2 py-1.5" style={{ borderTop: "1px solid var(--line)" }}>
-                  <span className="rz-mono text-[11px] flex-1" style={{ color: "var(--ink-soft)" }}>{formatDateBR(h.date)}</span>
-                  <span className="rz-mono text-xs font-semibold" style={{ color: h.amount >= 0 ? "var(--emerald)" : "var(--brick)" }}>
-                    {h.amount >= 0 ? "+ " : "− "}{formatCurrency(Math.abs(h.amount))}
-                  </span>
-                  {!vinculada && (
-                    <button onClick={() => onDeleteHistoryEntry(goal.id, h.id)} className="rz-focus p-1 rounded-md" aria-label="Excluir movimentação" style={{ color: "var(--ink-soft)" }}>
-                      <Trash2 size={12} />
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-
 function FixedBillsTab({
   fixedBills, transactions, refDate, shiftMonth, categoriesByType, banksList, findCategory, findBank,
   onLaunch, onLaunchAll, onUndoLaunch, onToggleActive,
@@ -4409,28 +4141,65 @@ function CarteiraTab({ transactions, banksList, setActiveTab }) {
 }
 
 
-function PoupancaTab({ savingsAccounts, savingsForm, setSavingsForm, savingsError, onAdd, onDelete, onContribute, onDeleteHistoryEntry }) {
-  const total = savingsAccounts.reduce((s, a) => s + a.currentAmount, 0);
+function CaixinhasTab({ boxes, savingsForm, setSavingsForm, savingsError, onAdd, onDelete, onContribute, onDeleteHistoryEntry, onUpdate, onArchive, onMove, onTransfer }) {
+  const [showTransfer, setShowTransfer] = useState(false);
+  const [transfer, setTransfer] = useState({ origem: "", destino: "", valor: "" });
+  const [transferError, setTransferError] = useState("");
+
+  const ativas = boxes.filter((b) => !b.archived).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const arquivadas = boxes.filter((b) => b.archived);
+
+  const total = ativas.reduce((s, b) => s + b.currentAmount, 0);
+  const comAlvo = ativas.filter((b) => b.targetAmount > 0);
+  const totalPlanejado = ativas.reduce((s, b) => s + (b.monthlyPlan || 0), 0);
+
+  const confirmarTransferencia = () => {
+    const v = parseFloat(String(transfer.valor).replace(",", "."));
+    if (!transfer.origem || !transfer.destino) { setTransferError("Escolha origem e destino."); return; }
+    if (transfer.origem === transfer.destino) { setTransferError("Origem e destino precisam ser diferentes."); return; }
+    if (!v || v <= 0) { setTransferError("Informe um valor."); return; }
+    onTransfer(transfer.origem, transfer.destino, v);
+    setTransfer({ origem: "", destino: "", valor: "" });
+    setTransferError("");
+    setShowTransfer(false);
+  };
 
   return (
     <div>
       <header className="mb-6 flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="rz-display text-2xl md:text-3xl">Poupança</h1>
-          <p className="text-sm mt-1" style={{ color: "var(--ink-soft)" }}>Quanto você já tem guardado, por categoria.</p>
+          <h1 className="rz-display text-2xl md:text-3xl">Caixinhas</h1>
+          <p className="text-sm mt-1" style={{ color: "var(--ink-soft)" }}>
+            Seu dinheiro guardado, separado por objetivo. Defina um alvo quando quiser acompanhar o progresso.
+          </p>
         </div>
+        {ativas.length > 1 && (
+          <button onClick={() => { setTransferError(""); setShowTransfer(true); }} className="rz-btn-ghost rz-focus text-sm flex items-center gap-2 whitespace-nowrap">
+            <Repeat size={15} /> Mover entre caixinhas
+          </button>
+        )}
       </header>
 
-      <div className="mb-6">
-        <SummaryCard label="Total guardado" value={total} icon={Landmark} tone="emerald" />
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
+        <SummaryCard label="Total guardado" value={total} icon={PiggyBank} tone="emerald" />
+        <SummaryCard label="Aporte mensal planejado" value={totalPlanejado} icon={Target} tone="emerald" />
+        <div className="rz-card p-4 flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <div className="text-xs mb-1" style={{ color: "var(--ink-soft)" }}>Caixinhas com alvo</div>
+            <div className="rz-mono text-lg font-semibold">{comAlvo.length} de {ativas.length}</div>
+          </div>
+          <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: "var(--emerald-soft)" }}>
+            <Landmark size={15} style={{ color: "var(--emerald)" }} />
+          </div>
+        </div>
       </div>
 
       <div className="rz-card p-5 mb-6">
-        <h2 className="text-sm font-semibold mb-3">Nova categoria de poupança</h2>
+        <h2 className="text-sm font-semibold mb-3">Nova caixinha</h2>
         <div className="flex flex-col sm:flex-row gap-3 mb-3">
           <input
             className="rz-input rz-focus flex-1"
-            placeholder="Ex: Reserva de Emergência, Casa Nova…"
+            placeholder="Ex: Reserva de Emergência, Viagem, Casa Nova…"
             value={savingsForm.label}
             onChange={(e) => setSavingsForm({ ...savingsForm, label: e.target.value })}
             onKeyDown={(e) => e.key === "Enter" && onAdd()}
@@ -4453,54 +4222,273 @@ function PoupancaTab({ savingsAccounts, savingsForm, setSavingsForm, savingsErro
         {savingsError && <div className="text-xs mt-2" style={{ color: "var(--brick)" }}>{savingsError}</div>}
       </div>
 
-      {savingsAccounts.length === 0 ? (
+      {ativas.length === 0 ? (
         <div className="rz-card p-10 text-center">
-          <Landmark size={26} className="mx-auto mb-3" style={{ color: "var(--line)" }} />
-          <div className="rz-display text-lg mb-1">Nenhuma categoria de poupança</div>
-          <p className="text-sm" style={{ color: "var(--ink-soft)" }}>Crie uma categoria acima pra começar a guardar dinheiro.</p>
+          <PiggyBank size={26} className="mx-auto mb-3" style={{ color: "var(--line)" }} />
+          <div className="rz-display text-lg mb-1">Nenhuma caixinha</div>
+          <p className="text-sm" style={{ color: "var(--ink-soft)" }}>Crie uma acima para começar a separar seu dinheiro por objetivo.</p>
         </div>
       ) : (
-        <div className="grid sm:grid-cols-2 gap-4">
-          {savingsAccounts.map((a) => (
-            <SavingsCard key={a.id} account={a} onDelete={onDelete} onContribute={onContribute} onDeleteHistoryEntry={onDeleteHistoryEntry} />
+        <div className="grid sm:grid-cols-2 gap-4 mb-6">
+          {ativas.map((b, i) => (
+            <CaixinhaCard
+              key={b.id}
+              box={b}
+              primeira={i === 0}
+              ultima={i === ativas.length - 1}
+              onDelete={onDelete}
+              onContribute={onContribute}
+              onDeleteHistoryEntry={onDeleteHistoryEntry}
+              onUpdate={onUpdate}
+              onArchive={onArchive}
+              onMove={onMove}
+            />
           ))}
+        </div>
+      )}
+
+      {arquivadas.length > 0 && (
+        <>
+          <h3 className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: "var(--ink-soft)" }}>Arquivadas</h3>
+          <div className="rz-card overflow-hidden opacity-70">
+            {arquivadas.map((b, i) => (
+              <div key={b.id} className="flex items-center gap-3 px-4 py-3" style={{ borderTop: i === 0 ? "none" : "1px solid var(--line)" }}>
+                <span className="rz-dot" style={{ background: b.color }} />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm truncate">{b.label}</div>
+                  {b.targetAmount > 0 && (
+                    <div className="text-xs" style={{ color: "var(--ink-soft)" }}>Alvo era {formatCurrency(b.targetAmount)}</div>
+                  )}
+                </div>
+                <span className="rz-mono text-sm whitespace-nowrap" style={{ color: "var(--ink-soft)" }}>{formatCurrency(b.currentAmount)}</span>
+                <button onClick={() => onArchive(b.id)} className="rz-focus p-1.5 rounded-md" aria-label="Reativar" style={{ color: "var(--emerald)" }}>
+                  <RotateCcw size={14} />
+                </button>
+                <button onClick={() => onDelete(b)} className="rz-focus p-1.5 rounded-md" aria-label="Excluir" style={{ color: "var(--ink-soft)" }}>
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {showTransfer && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-6" style={{ background: "rgba(30,43,35,0.45)" }}>
+          <div className="rz-card w-full sm:max-w-md p-5 sm:p-6" style={{ borderRadius: "14px 14px 0 0" }}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="rz-display text-xl">Mover entre caixinhas</h2>
+              <button onClick={() => setShowTransfer(false)} className="rz-focus" style={{ color: "var(--ink-soft)" }} aria-label="Fechar"><X size={20} /></button>
+            </div>
+            <div className="flex flex-col gap-3">
+              <div>
+                <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>De</label>
+                <select className="rz-input rz-focus" value={transfer.origem} onChange={(e) => setTransfer({ ...transfer, origem: e.target.value })}>
+                  <option value="">Selecione</option>
+                  {ativas.filter((b) => b.currentAmount > 0).map((b) => (
+                    <option key={b.id} value={b.id}>{b.label} — {formatCurrency(b.currentAmount)}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Para</label>
+                <select className="rz-input rz-focus" value={transfer.destino} onChange={(e) => setTransfer({ ...transfer, destino: e.target.value })}>
+                  <option value="">Selecione</option>
+                  {ativas.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Valor (R$)</label>
+                <input className="rz-input rz-focus rz-mono" inputMode="decimal" placeholder="0,00" value={transfer.valor} onChange={(e) => setTransfer({ ...transfer, valor: e.target.value })} onKeyDown={(e) => e.key === "Enter" && confirmarTransferencia()} />
+              </div>
+              {transferError && <div className="text-xs" style={{ color: "var(--brick)" }}>{transferError}</div>}
+              <div className="flex gap-2 mt-1">
+                <button onClick={() => setShowTransfer(false)} className="rz-btn-ghost rz-focus flex-1 text-sm">Cancelar</button>
+                <button onClick={confirmarTransferencia} className="rz-btn-primary rz-focus flex-1 text-sm flex items-center justify-center gap-2">
+                  <Check size={16} /> Mover
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-function SavingsCard({ account, onDelete, onContribute, onDeleteHistoryEntry }) {
+function CaixinhaCard({ box, primeira, ultima, onDelete, onContribute, onDeleteHistoryEntry, onUpdate, onArchive, onMove }) {
   const [amount, setAmount] = useState("");
   const [showHistory, setShowHistory] = useState(false);
-  const history = account.history || [];
+  const [showSim, setShowSim] = useState(false);
+  const [editandoAlvo, setEditandoAlvo] = useState(false);
+  const [tempAlvo, setTempAlvo] = useState(box.targetAmount ? String(box.targetAmount) : "");
+  const [tempPrazo, setTempPrazo] = useState(box.deadline || "");
+  const [tempPlano, setTempPlano] = useState(box.monthlyPlan ? String(box.monthlyPlan) : "");
+
+  const history = box.history || [];
+  const temAlvo = box.targetAmount > 0;
+  const atual = box.currentAmount;
+  const pct = temAlvo ? (atual / box.targetAmount) * 100 : 0;
+  const done = temAlvo && atual >= box.targetAmount;
+  const remaining = temAlvo ? Math.max(0, box.targetAmount - atual) : 0;
+
+  let sugestaoMensal = null;
+  let prazoVencido = false;
+  let mesesRestantes = null;
+  if (temAlvo && box.deadline && !done) {
+    const now = new Date(); now.setHours(0, 0, 0, 0);
+    const prazo = new Date(box.deadline + "T00:00:00");
+    const dias = Math.ceil((prazo - now) / 86400000);
+    if (dias <= 0) prazoVencido = true;
+    else { mesesRestantes = Math.max(1, Math.round(dias / 30.44)); sugestaoMensal = remaining / mesesRestantes; }
+  }
+
+  const [aporteSim, setAporteSim] = useState(0);
+  useEffect(() => {
+    const base = box.monthlyPlan || sugestaoMensal;
+    if (base && aporteSim === 0) setAporteSim(Math.round(base));
+  }, [sugestaoMensal, box.monthlyPlan]);
+
+  const aporteBase = box.monthlyPlan || sugestaoMensal || (remaining > 0 ? remaining / 12 : 100);
+  const simMax = Math.max(50, Math.ceil((aporteBase * 3) / 50) * 50);
+  const mesesSim = aporteSim > 0 && remaining > 0 ? Math.ceil(remaining / aporteSim) : null;
+  const dataSim = mesesSim ? new Date(new Date().getFullYear(), new Date().getMonth() + mesesSim, 1) : null;
 
   const submitDelta = (sign) => {
     const num = parseFloat(String(amount).replace(",", "."));
     if (!num || num <= 0) return;
-    onContribute(account.id, num * sign);
+    onContribute(box.id, num * sign);
     setAmount("");
+  };
+
+  const salvarAlvo = () => {
+    onUpdate(box.id, {
+      targetAmount: parseFloat(String(tempAlvo).replace(",", ".")) || null,
+      deadline: tempPrazo,
+      monthlyPlan: parseFloat(String(tempPlano).replace(",", ".")) || null,
+    });
+    setEditandoAlvo(false);
   };
 
   return (
     <div className="rz-card p-4 sm:p-5">
-      <div className="flex items-start justify-between mb-3 gap-2">
+      <div className="flex items-start justify-between mb-2 gap-2">
         <div className="flex items-center gap-2 min-w-0">
-          <span className="rz-dot" style={{ background: account.color }} />
-          <span className="text-sm font-medium truncate">{account.label}</span>
+          <span className="rz-dot" style={{ background: box.color }} />
+          <span className="text-sm font-medium truncate">{box.label}</span>
         </div>
-        <button onClick={() => onDelete(account)} className="rz-focus p-1 rounded-md shrink-0" aria-label="Excluir categoria" style={{ color: "var(--ink-soft)" }}>
-          <Trash2 size={13} />
-        </button>
+        <div className="flex items-center gap-0.5 shrink-0">
+          <button onClick={() => onMove(box.id, -1)} disabled={primeira} className="rz-focus p-1 rounded-md disabled:opacity-25" aria-label="Subir" style={{ color: "var(--ink-soft)" }}><ChevronLeft size={13} style={{ transform: "rotate(90deg)" }} /></button>
+          <button onClick={() => onMove(box.id, 1)} disabled={ultima} className="rz-focus p-1 rounded-md disabled:opacity-25" aria-label="Descer" style={{ color: "var(--ink-soft)" }}><ChevronRight size={13} style={{ transform: "rotate(90deg)" }} /></button>
+          <button onClick={() => { setTempAlvo(box.targetAmount ? String(box.targetAmount) : ""); setTempPrazo(box.deadline || ""); setTempPlano(box.monthlyPlan ? String(box.monthlyPlan) : ""); setEditandoAlvo(true); }} className="rz-focus p-1 rounded-md" aria-label="Definir alvo" style={{ color: "var(--ink-soft)" }}><Pencil size={13} /></button>
+          <button onClick={() => onArchive(box.id)} className="rz-focus p-1 rounded-md" aria-label="Arquivar" style={{ color: "var(--ink-soft)" }}><History size={13} /></button>
+          <button onClick={() => onDelete(box)} className="rz-focus p-1 rounded-md" aria-label="Excluir" style={{ color: "var(--ink-soft)" }}><Trash2 size={13} /></button>
+        </div>
       </div>
 
-      <div className="rz-mono text-2xl font-semibold mb-4" style={{ color: "var(--emerald)" }}>{formatCurrency(account.currentAmount)}</div>
+      {editandoAlvo ? (
+        <div className="flex flex-col gap-2 mb-3 p-3 rounded-lg" style={{ background: "var(--paper-alt)" }}>
+          <div className="flex gap-2">
+            <div className="flex-1">
+              <label className="text-xs block mb-1" style={{ color: "var(--ink-soft)" }}>Alvo (R$)</label>
+              <input className="rz-input rz-focus rz-mono text-sm" inputMode="decimal" placeholder="sem alvo" value={tempAlvo} onChange={(e) => setTempAlvo(e.target.value)} />
+            </div>
+            <div className="flex-1">
+              <label className="text-xs block mb-1" style={{ color: "var(--ink-soft)" }}>Prazo</label>
+              <input type="date" className="rz-input rz-focus rz-mono text-sm" value={tempPrazo} onChange={(e) => setTempPrazo(e.target.value)} />
+            </div>
+          </div>
+          <div>
+            <label className="text-xs block mb-1" style={{ color: "var(--ink-soft)" }}>Aporte mensal planejado (R$)</label>
+            <input className="rz-input rz-focus rz-mono text-sm" inputMode="decimal" placeholder="quanto pretendo guardar por mês" value={tempPlano} onChange={(e) => setTempPlano(e.target.value)} />
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => setEditandoAlvo(false)} className="rz-btn-ghost rz-focus flex-1 text-xs !py-1.5">Cancelar</button>
+            <button onClick={salvarAlvo} className="rz-btn-primary rz-focus flex-1 text-xs !py-1.5">Salvar</button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="flex items-baseline justify-between mb-2">
+            <span className="rz-mono text-lg font-semibold" style={{ color: done ? "var(--emerald)" : "var(--ink)" }}>{formatCurrency(atual)}</span>
+            {temAlvo && <span className="rz-mono text-xs" style={{ color: "var(--ink-soft)" }}>de {formatCurrency(box.targetAmount)}</span>}
+          </div>
 
-      <div className="flex items-center gap-2">
-        <input className="rz-input rz-focus rz-mono text-sm flex-1" inputMode="decimal" placeholder="Valor" value={amount} onChange={(e) => setAmount(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submitDelta(1)} />
-        <button onClick={() => submitDelta(1)} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--emerald)" }} aria-label="Adicionar valor"><Plus size={16} /></button>
-        <button onClick={() => submitDelta(-1)} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--brick)" }} aria-label="Retirar valor"><Minus size={16} /></button>
-      </div>
+          {temAlvo && (
+            <>
+              <div className="rz-progress-track mb-1">
+                <div className="rz-progress-fill" style={{ width: `${Math.min(pct, 100)}%`, background: done ? "var(--emerald)" : box.color }} />
+              </div>
+              <div className="flex items-center justify-between mb-2">
+                <span className="rz-mono text-[11px]" style={{ color: "var(--ink-soft)" }}>{pct.toFixed(0)}%</span>
+                {box.deadline && <span className="text-[11px]" style={{ color: "var(--ink-soft)" }}>até {formatDateBR(box.deadline)}</span>}
+              </div>
+            </>
+          )}
+
+          {box.monthlyPlan > 0 && (
+            <div className="text-xs mb-2" style={{ color: "var(--ink-soft)" }}>
+              Planejado: {formatCurrency(box.monthlyPlan)}/mês
+            </div>
+          )}
+
+          {temAlvo && !done && box.deadline && (
+            <div className="rounded-lg px-3 py-2 mb-3 text-xs" style={{ background: "var(--paper-alt)", color: prazoVencido ? "var(--brick)" : "var(--ink-soft)" }}>
+              {prazoVencido
+                ? "Prazo já passou — ajuste a data ou dê um empurrão no valor."
+                : <>Guarde <span className="rz-mono font-semibold" style={{ color: "var(--ink)" }}>{formatCurrency(sugestaoMensal)}</span>/mês para chegar até {formatDateBR(box.deadline)}</>}
+            </div>
+          )}
+
+          {done ? (
+            <span className="rz-stamp rz-stamp-pago inline-flex items-center gap-1"><PartyPopper size={11} /> Alvo alcançado</span>
+          ) : (
+            <>
+              <div className="flex items-center gap-2">
+                <input className="rz-input rz-focus rz-mono text-sm flex-1" inputMode="decimal" placeholder="Valor" value={amount} onChange={(e) => setAmount(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submitDelta(1)} />
+                <button onClick={() => submitDelta(1)} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--emerald)" }} aria-label="Guardar"><Plus size={16} /></button>
+                <button onClick={() => submitDelta(-1)} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--brick)" }} aria-label="Retirar"><Minus size={16} /></button>
+              </div>
+
+              {temAlvo && (
+                <>
+                  <button onClick={() => setShowSim((v) => !v)} className="rz-focus text-xs font-medium mt-3 flex items-center gap-1" style={{ color: "var(--ink-soft)" }}>
+                    <Target size={13} /> {showSim ? "Ocultar" : "Simular"} ritmo
+                  </button>
+                  {showSim && (
+                    <div className="mt-2 p-3 rounded-lg" style={{ background: "var(--paper-alt)" }}>
+                      <div className="flex items-baseline justify-between mb-2">
+                        <span className="text-xs" style={{ color: "var(--ink-soft)" }}>Guardando por mês</span>
+                        <span className="rz-mono text-sm font-semibold">{formatCurrency(aporteSim)}</span>
+                      </div>
+                      <input type="range" min="0" max={simMax} step="10" value={aporteSim} onChange={(e) => setAporteSim(Number(e.target.value))} className="w-full rz-focus" style={{ accentColor: box.color }} />
+                      <p className="text-xs mt-2" style={{ color: "var(--ink-soft)" }}>
+                        {aporteSim <= 0 ? "Escolha um valor para simular." : (
+                          <>
+                            Faltam {formatCurrency(remaining)} — nesse ritmo você chega em{" "}
+                            <strong style={{ color: "var(--ink)" }}>{mesesSim} {mesesSim === 1 ? "mês" : "meses"}</strong>
+                            {dataSim && `, por volta de ${MONTHS[dataSim.getMonth()].slice(0, 3)}/${dataSim.getFullYear()}`}.
+                            {box.deadline && !prazoVencido && mesesRestantes && (
+                              mesesSim <= mesesRestantes
+                                ? <span style={{ color: "var(--emerald)" }}> Dentro do prazo. ✓</span>
+                                : <span style={{ color: "var(--brick)" }}> {mesesSim - mesesRestantes} {mesesSim - mesesRestantes === 1 ? "mês" : "meses"} além do prazo.</span>
+                            )}
+                          </>
+                        )}
+                      </p>
+                      {box.monthlyPlan > 0 && aporteSim !== box.monthlyPlan && (
+                        <button onClick={() => onUpdate(box.id, { monthlyPlan: aporteSim })} className="rz-btn-ghost rz-focus text-xs !py-1.5 !px-3 mt-2">
+                          Usar {formatCurrency(aporteSim)} como meu plano mensal
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </>
+      )}
 
       {history.length > 0 && (
         <div className="mt-3 pt-3" style={{ borderTop: "1px solid var(--line)" }}>
@@ -4511,11 +4499,13 @@ function SavingsCard({ account, onDelete, onContribute, onDeleteHistoryEntry }) 
             <div className="flex flex-col mt-2 max-h-40 overflow-y-auto">
               {[...history].reverse().map((h) => (
                 <div key={h.id} className="flex items-center gap-2 py-1.5" style={{ borderTop: "1px solid var(--line)" }}>
-                  <span className="rz-mono text-[11px] flex-1" style={{ color: "var(--ink-soft)" }}>{formatDateBR(h.date)}</span>
+                  <span className="rz-mono text-[11px] shrink-0" style={{ color: "var(--ink-soft)" }}>{formatDateBR(h.date)}</span>
+                  {h.note && <span className="text-[11px] flex-1 truncate" style={{ color: "var(--ink-soft)" }}>{h.note}</span>}
+                  {!h.note && <span className="flex-1" />}
                   <span className="rz-mono text-xs font-semibold" style={{ color: h.amount >= 0 ? "var(--emerald)" : "var(--brick)" }}>
                     {h.amount >= 0 ? "+ " : "− "}{formatCurrency(Math.abs(h.amount))}
                   </span>
-                  <button onClick={() => onDeleteHistoryEntry(account.id, h.id)} className="rz-focus p-1 rounded-md" aria-label="Excluir movimentação" style={{ color: "var(--ink-soft)" }}>
+                  <button onClick={() => onDeleteHistoryEntry(box.id, h.id)} className="rz-focus p-1 rounded-md" aria-label="Excluir movimentação" style={{ color: "var(--ink-soft)" }}>
                     <Trash2 size={12} />
                   </button>
                 </div>
@@ -4527,6 +4517,7 @@ function SavingsCard({ account, onDelete, onContribute, onDeleteHistoryEntry }) 
     </div>
   );
 }
+
 
 function VisaoGeralTab({ transactions, periodFiltered, totals, refDate, periodMode, shiftMonth, setPeriodMode, findCategory, setActiveTab, fixedBills, findBank, onLaunchFixedBill, savingsAccounts, saldosIniciais }) {
   const saldoTotal = useMemo(
