@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import Papa from "papaparse";
 import {
-  BookOpen, Home, Receipt, Repeat, Target, BarChart3, Landmark, Wallet, HandCoins,
+  BookOpen, Home, Receipt, Repeat, Target, BarChart3, Landmark, Wallet, HandCoins, CreditCard,
   Plus, Trash2, Pencil, X, Check, Search, ChevronLeft, ChevronRight,
   TrendingUp, TrendingDown, Scale, Undo2, Menu, AlertCircle, PauseCircle, PlayCircle,
   PiggyBank, Minus, PartyPopper, History, Settings, RotateCcw, LogOut, FileUp, FileDown, Users, Copy, Paperclip, Loader2, Archive,
@@ -42,7 +42,7 @@ const DEFAULT_BANKS = [
   { id: "carteira", label: "Carteira", color: "#6B5B3E", initialBalance: 0 },
   { id: "conta_corrente", label: "Conta Corrente", color: "#4A6FA5", initialBalance: 0 },
   { id: "poupanca", label: "Poupança", color: "#3A7A8C", initialBalance: 0 },
-  { id: "cartao_credito", label: "Cartão de Crédito", color: "#7A6A9E", initialBalance: 0 },
+  { id: "cartao_credito", label: "Cartão de Crédito", color: "#7A6A9E", initialBalance: 0, kind: "cartao" },
 ];
 
 const NAV_ITEMS = [
@@ -50,7 +50,7 @@ const NAV_ITEMS = [
   { id: "lancamentos", label: "Lançamentos", icon: Receipt, ready: true },
   { id: "fixas", label: "Contas Fixas", icon: Repeat, ready: true },
   { id: "poupanca", label: "Caixinhas", icon: PiggyBank, ready: true },
-  { id: "carteira", label: "Contas", icon: Wallet, ready: true },
+  { id: "carteira", label: "Contas e Cartões", icon: Wallet, ready: true },
   { id: "orcamento", label: "Orçamento", icon: Target, ready: true },
   { id: "dividas", label: "Dívidas", icon: HandCoins, ready: true },
   { id: "relatorios", label: "Relatórios", icon: BarChart3, ready: true },
@@ -250,18 +250,68 @@ function getAmountForPeriod(bill, refDate) {
 
 // Efeito de um lançamento sobre o total que você tem em contas.
 // Transferência entre contas se anula; para caixinha, o dinheiro sai das contas.
-function efeitoNoSaldoGeral(t) {
-  if (t.type === "transferencia") {
-    if (t.toBox) return -t.amount;    // guardou numa caixinha
-    if (t.fromBox) return t.amount;   // resgatou de uma caixinha
-    return 0;                          // entre contas
+// Período coberto pela fatura de um cartão num determinado mês.
+// Com dia de fechamento, o ciclo vai do dia seguinte ao fechamento anterior
+// até o fechamento deste mês. Sem ele, usa o mês do calendário.
+function cicloDaFatura(cartao, refDate) {
+  const y = refDate.getFullYear(), m = refDate.getMonth();
+  if (!cartao.closingDay) {
+    return { inicio: new Date(y, m, 1), fim: new Date(y, m + 1, 0, 23, 59, 59) };
   }
+  const diasAnterior = new Date(y, m, 0).getDate();
+  const diasAtual = new Date(y, m + 1, 0).getDate();
+  const fechAnterior = new Date(y, m - 1, Math.min(cartao.closingDay, diasAnterior));
+  return {
+    inicio: new Date(fechAnterior.getFullYear(), fechAnterior.getMonth(), fechAnterior.getDate() + 1),
+    fim: new Date(y, m, Math.min(cartao.closingDay, diasAtual), 23, 59, 59),
+  };
+}
+
+function calcularFatura(cartao, transactions, refDate) {
+  const { inicio, fim } = cicloDaFatura(cartao, refDate);
+  const itens = transactions
+    .filter((t) => {
+      if (t.account !== cartao.id || t.type !== "despesa") return false;
+      const d = new Date(t.date + "T00:00:00");
+      return d >= inicio && d <= fim;
+    })
+    .sort((a, b) => (a.date < b.date ? 1 : -1));
+  const total = itens.reduce((s, t) => s + t.amount, 0);
+  const pagamentos = transactions
+    .filter((t) => t.type === "transferencia" && t.toAccount === cartao.id)
+    .filter((t) => { const d = new Date(t.date + "T00:00:00"); return d >= inicio && d <= fim; })
+    .reduce((s, t) => s + t.amount, 0);
+  let vencimento = null;
+  if (cartao.dueDay) {
+    const base = cartao.closingDay && cartao.dueDay < cartao.closingDay
+      ? new Date(refDate.getFullYear(), refDate.getMonth() + 1, 1)
+      : new Date(refDate.getFullYear(), refDate.getMonth(), 1);
+    const dias = new Date(base.getFullYear(), base.getMonth() + 1, 0).getDate();
+    vencimento = new Date(base.getFullYear(), base.getMonth(), Math.min(cartao.dueDay, dias));
+  }
+  return { itens, total, pagamentos, aberto: total - pagamentos, inicio, fim, vencimento };
+}
+
+function efeitoNoSaldoGeral(t, cardIds) {
+  const ehCartao = (id) => !!(id && cardIds && cardIds.has(id));
+
+  if (t.type === "transferencia") {
+    if (t.toBox) return -t.amount;              // guardou numa caixinha
+    if (t.fromBox) return t.amount;             // resgatou de uma caixinha
+    if (ehCartao(t.toAccount)) return -t.amount; // pagou a fatura: sai da conta
+    if (ehCartao(t.account)) return t.amount;    // estorno do cartão para a conta
+    return 0;                                    // entre contas comuns: se anula
+  }
+
+  // Compra no cartão não tira dinheiro da conta — isso só acontece na fatura.
+  if (ehCartao(t.account)) return 0;
+
   return t.type === "receita" ? t.amount : -t.amount;
 }
 
-function buildCashFlowProjection(transactions, fixedBills, horizonDays, saldosIniciais = 0) {
+function buildCashFlowProjection(transactions, fixedBills, horizonDays, saldosIniciais = 0, cardIds) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const baseline = saldosIniciais + transactions.filter((t) => t.status === "pago").reduce((s, t) => s + efeitoNoSaldoGeral(t), 0);
+  const baseline = saldosIniciais + transactions.filter((t) => t.status === "pago").reduce((s, t) => s + efeitoNoSaldoGeral(t, cardIds), 0);
 
   const events = [];
 
@@ -271,7 +321,7 @@ function buildCashFlowProjection(transactions, fixedBills, horizonDays, saldosIn
     const d = new Date(t.date + "T00:00:00");
     const diffDays = Math.round((d - today) / 86400000);
     if (diffDays >= 0 && diffDays <= horizonDays) {
-      events.push({ date: d, amount: efeitoNoSaldoGeral(t) });
+      events.push({ date: d, amount: efeitoNoSaldoGeral(t, cardIds) });
     }
   });
 
@@ -358,7 +408,7 @@ export default function App() {
 
   const [customBanks, setCustomBanks] = useState([]);
   const [banksLoaded, setBanksLoaded] = useState(false);
-  const [bankForm, setBankForm] = useState({ label: "", color: COLOR_PALETTE[0], initialBalance: "" });
+  const [bankForm, setBankForm] = useState({ label: "", color: COLOR_PALETTE[0], initialBalance: "", kind: "conta", closingDay: "", dueDay: "" });
   const [bankError, setBankError] = useState("");
   const [hiddenDefaultBanks, setHiddenDefaultBanks] = useState([]);
 
@@ -763,7 +813,9 @@ export default function App() {
   const banksList = useMemo(() => [...DEFAULT_BANKS.filter((b) => !hiddenDefaultBanks.includes(b.id)), ...customBanks], [customBanks, hiddenDefaultBanks]);
   const findBank = (id) => [...DEFAULT_BANKS, ...customBanks].find((b) => b.id === id);
 
-  const saldosIniciais = useMemo(() => banksList.reduce((s, b) => s + (b.initialBalance || 0), 0), [banksList]);
+  const saldosIniciais = useMemo(() => banksList.filter((b) => b.kind !== "cartao").reduce((s, b) => s + (b.initialBalance || 0), 0), [banksList]);
+
+  const cardIds = useMemo(() => new Set(banksList.filter((b) => b.kind === "cartao").map((b) => b.id)), [banksList]);
 
   const categoryMemory = useMemo(() => buildCategoryMemory(transactions), [transactions]);
 
@@ -1142,8 +1194,15 @@ export default function App() {
     if (!label) { setBankError("Dê um nome para o banco ou conta."); return; }
     if (banksList.some((b) => b.label.toLowerCase() === label.toLowerCase())) { setBankError("Já existe um banco com esse nome."); return; }
     const inicial = parseFloat(String(bankForm.initialBalance).replace(",", ".")) || 0;
-    setCustomBanks((prev) => [...prev, { id: `banco_${uid()}`, label, color: bankForm.color, initialBalance: inicial }]);
-    setBankForm({ label: "", color: COLOR_PALETTE[0], initialBalance: "" });
+    const ehCartao = bankForm.kind === "cartao";
+    setCustomBanks((prev) => [...prev, {
+      id: `banco_${uid()}`, label, color: bankForm.color,
+      initialBalance: ehCartao ? 0 : inicial,
+      kind: bankForm.kind,
+      closingDay: ehCartao ? (parseInt(bankForm.closingDay, 10) || null) : null,
+      dueDay: ehCartao ? (parseInt(bankForm.dueDay, 10) || null) : null,
+    }]);
+    setBankForm({ label: "", color: COLOR_PALETTE[0], initialBalance: "", kind: "conta", closingDay: "", dueDay: "" });
     setBankError("");
   };
 
@@ -1512,6 +1571,7 @@ export default function App() {
             onLaunchFixedBill={handleLaunchFixedBill}
             savingsAccounts={savingsAccounts}
             saldosIniciais={saldosIniciais}
+            cardIds={cardIds}
           />
         ) : activeTab === "dividas" ? (
           <DividasTab
@@ -1536,6 +1596,9 @@ export default function App() {
             transactions={transactions}
             banksList={banksList}
             setActiveTab={setActiveTab}
+            refDate={refDate}
+            shiftMonth={shiftMonth}
+            findCategory={findCategory}
           />
         ) : activeTab === "poupanca" ? (
           <CaixinhasTab
@@ -1592,8 +1655,12 @@ export default function App() {
             fixedBills={fixedBills}
             savingsAccounts={savingsAccounts}
             saldosIniciais={saldosIniciais}
+            cardIds={cardIds}
             budgets={budgets}
             categoriesByType={categoriesByType}
+            banksList={banksList}
+            findBank={findBank}
+            cardIds={cardIds}
           />
         ) : activeTab === "orcamento" ? (
           <OrcamentoTab
@@ -2538,7 +2605,7 @@ function TemaSection({ theme, setTheme }) {
   );
 }
 
-function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, saldosIniciais, budgets, categoriesByType }) {
+function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, saldosIniciais, budgets, categoriesByType, banksList, findBank, cardIds }) {
   const [monthsCount, setMonthsCount] = useState(6);
   const [horizonDays, setHorizonDays] = useState(90);
   const [selectedCats, setSelectedCats] = useState([]);
@@ -2546,7 +2613,7 @@ function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, s
   const [customStart, setCustomStart] = useState(() => new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10));
   const [customEnd, setCustomEnd] = useState(() => todayISO());
 
-  const projection = useMemo(() => buildCashFlowProjection(transactions, fixedBills, horizonDays, saldosIniciais), [transactions, fixedBills, horizonDays, saldosIniciais]);
+  const projection = useMemo(() => buildCashFlowProjection(transactions, fixedBills, horizonDays, saldosIniciais, cardIds), [transactions, fixedBills, horizonDays, saldosIniciais, cardIds]);
 
   const savingsTotal = useMemo(() => savingsAccounts.reduce((s, a) => s + a.currentAmount, 0), [savingsAccounts]);
 
@@ -2661,6 +2728,36 @@ function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, s
   const toggleCat = (id) => {
     setSelectedCats((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   };
+
+  // ---- Gastos por forma de pagamento ----
+  const porFormaPagamento = useMemo(() => {
+    const agora = new Date();
+    const inicio = new Date(agora.getFullYear(), agora.getMonth() - (monthsCount - 1), 1);
+    const doPeriodo = transactions.filter((t) => {
+      if (t.type !== "despesa") return false;
+      const d = new Date(t.date + "T00:00:00");
+      return d >= inicio;
+    });
+    const map = {};
+    doPeriodo.forEach((t) => {
+      const chave = t.account || "__sem__";
+      if (!map[chave]) map[chave] = { total: 0, categorias: {} };
+      map[chave].total += t.amount;
+      map[chave].categorias[t.category] = (map[chave].categorias[t.category] || 0) + t.amount;
+    });
+    const totalGeral = Object.values(map).reduce((s, v) => s + v.total, 0);
+    return Object.entries(map).map(([id, v]) => {
+      const banco = id === "__sem__" ? { label: "Sem conta definida", color: "var(--line)" } : (findBank(id) || { label: id, color: "#9A8A7A" });
+      return {
+        id, label: banco.label, color: banco.color, ehCartao: banco.kind === "cartao",
+        total: v.total,
+        pct: totalGeral > 0 ? (v.total / totalGeral) * 100 : 0,
+        categorias: Object.entries(v.categorias)
+          .map(([cid, cv]) => ({ ...findCategory("despesa", cid), total: cv }))
+          .sort((a, b) => b.total - a.total),
+      };
+    }).sort((a, b) => b.total - a.total);
+  }, [transactions, monthsCount, findBank, findCategory]);
 
   // ---- Retrospectiva anual ----
   const [anoRetro, setAnoRetro] = useState(new Date().getFullYear());
@@ -3021,6 +3118,49 @@ function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, s
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Gastos por forma de pagamento */}
+      {porFormaPagamento.length > 0 && (
+        <div className="rz-card p-4 sm:p-5 mb-6">
+          <h2 className="text-sm font-semibold mb-1">Gastos por forma de pagamento</h2>
+          <p className="text-xs mb-4" style={{ color: "var(--ink-soft)" }}>
+            Onde seu dinheiro passou nos últimos {monthsCount} meses, e no que foi gasto em cada lugar.
+          </p>
+          <div className="flex flex-col gap-4">
+            {porFormaPagamento.map((f) => (
+              <div key={f.id}>
+                <div className="flex items-center justify-between gap-2 mb-1.5 flex-wrap">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="rz-dot" style={{ background: f.color }} />
+                    <span className="text-sm truncate">{f.label}</span>
+                    {f.ehCartao && (
+                      <span className="rz-mono text-[9px] px-1.5 py-0.5 rounded" style={{ background: "var(--paper-alt)", color: "var(--ink-soft)" }}>CARTÃO</span>
+                    )}
+                  </div>
+                  <span className="rz-mono text-sm font-semibold whitespace-nowrap" style={{ color: "var(--brick)" }}>
+                    {formatCurrency(f.total)} <span className="text-xs font-normal" style={{ color: "var(--ink-soft)" }}>({f.pct.toFixed(0)}%)</span>
+                  </span>
+                </div>
+                <div className="rz-progress-track mb-2">
+                  <div className="rz-progress-fill" style={{ width: `${f.pct}%`, background: f.color }} />
+                </div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 pl-4">
+                  {f.categorias.slice(0, 6).map((c) => (
+                    <div key={c.label} className="flex items-center gap-1.5 text-xs">
+                      <span className="rz-dot" style={{ background: c.color, width: 6, height: 6 }} />
+                      <span style={{ color: "var(--ink-soft)" }}>{c.label}</span>
+                      <span className="rz-mono">{formatCurrency(c.total)}</span>
+                    </div>
+                  ))}
+                  {f.categorias.length > 6 && (
+                    <span className="text-xs" style={{ color: "var(--ink-soft)" }}>+{f.categorias.length - 6} categorias</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -4152,9 +4292,10 @@ function DebtCard({ debt, onEdit, onDelete, onPayment, onToggleSettled, categori
   );
 }
 
-function CarteiraTab({ transactions, banksList, setActiveTab }) {
-  // Efeito de um lançamento sobre uma conta específica:
-  // receita entra, despesa sai, transferência sai da origem e entra no destino.
+function CarteiraTab({ transactions, banksList, setActiveTab, refDate, shiftMonth, findCategory }) {
+  const contas = banksList.filter((b) => b.kind !== "cartao");
+  const cartoes = banksList.filter((b) => b.kind === "cartao");
+
   const efeitoNaConta = (t, contaId) => {
     if (t.type === "transferencia") {
       if (t.account === contaId) return -t.amount;
@@ -4165,16 +4306,12 @@ function CarteiraTab({ transactions, banksList, setActiveTab }) {
     return t.type === "receita" ? t.amount : -t.amount;
   };
 
-  const saldoPorConta = useMemo(() => {
-    return banksList.map((c) => {
-      const daConta = transactions.filter((t) => t.account === c.id || t.toAccount === c.id);
-      const saldo = (c.initialBalance || 0) + daConta.filter((t) => t.status === "pago")
-        .reduce((s, t) => s + efeitoNaConta(t, c.id), 0);
-      const pendente = daConta.filter((t) => t.status === "pendente")
-        .reduce((s, t) => s + efeitoNaConta(t, c.id), 0);
-      return { ...c, saldo, pendente, movimentos: daConta.length };
-    });
-  }, [banksList, transactions]);
+  const saldoPorConta = useMemo(() => contas.map((c) => {
+    const daConta = transactions.filter((t) => t.account === c.id || t.toAccount === c.id);
+    const saldo = (c.initialBalance || 0) + daConta.filter((t) => t.status === "pago").reduce((s, t) => s + efeitoNaConta(t, c.id), 0);
+    const pendente = daConta.filter((t) => t.status === "pendente").reduce((s, t) => s + efeitoNaConta(t, c.id), 0);
+    return { ...c, saldo, pendente, movimentos: daConta.length };
+  }), [contas, transactions]);
 
   const semConta = useMemo(() => {
     const sem = transactions.filter((t) => !t.account && t.type !== "transferencia");
@@ -4185,39 +4322,41 @@ function CarteiraTab({ transactions, banksList, setActiveTab }) {
     };
   }, [transactions]);
 
+  const faturas = useMemo(() => cartoes.map((c) => ({ ...c, ...calcularFatura(c, transactions, refDate) })), [cartoes, transactions, refDate]);
+
   const totalSaldo = saldoPorConta.reduce((s, c) => s + c.saldo, 0) + semConta.saldo;
   const totalPendente = saldoPorConta.reduce((s, c) => s + c.pendente, 0) + semConta.pendente;
+  const totalFaturas = faturas.reduce((s, f) => s + f.aberto, 0);
 
   const linhas = [
-    ...saldoPorConta.filter((c) => c.movimentos > 0),
+    ...saldoPorConta.filter((c) => c.movimentos > 0 || c.initialBalance),
     ...(semConta.movimentos > 0 ? [{ id: "__sem__", label: "Sem conta definida", color: "var(--line)", ...semConta }] : []),
   ];
 
   return (
     <div>
       <header className="mb-6">
-        <h1 className="rz-display text-2xl md:text-3xl">Contas</h1>
-        <p className="text-sm mt-1" style={{ color: "var(--ink-soft)" }}>Quanto tem em cada conta, considerando todo o histórico.</p>
+        <h1 className="rz-display text-2xl md:text-3xl">Contas e Cartões</h1>
+        <p className="text-sm mt-1" style={{ color: "var(--ink-soft)" }}>Quanto tem em cada conta e quanto está em aberto nos cartões.</p>
       </header>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
         <SummaryCard label="Total em contas" value={totalSaldo} icon={Wallet} tone={totalSaldo >= 0 ? "emerald" : "brick"} />
-        <SummaryCard label="Previsto (com pendentes)" value={totalSaldo + totalPendente} icon={Scale} tone={totalSaldo + totalPendente >= 0 ? "emerald" : "brick"} />
+        <SummaryCard label="Faturas em aberto" value={totalFaturas} icon={CreditCard} tone="brick" />
+        <SummaryCard label="Sobra depois das faturas" value={totalSaldo - totalFaturas} icon={Scale} tone={totalSaldo - totalFaturas >= 0 ? "emerald" : "brick"} />
       </div>
 
+      <h2 className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: "var(--ink-soft)" }}>Saldo por conta</h2>
       {linhas.length === 0 ? (
-        <div className="rz-card p-10 text-center">
-          <Wallet size={26} className="mx-auto mb-3" style={{ color: "var(--line)" }} />
-          <div className="rz-display text-lg mb-1">Nenhuma movimentação por conta</div>
-          <p className="text-sm mb-4" style={{ color: "var(--ink-soft)" }}>
+        <div className="rz-card p-8 text-center mb-6">
+          <Wallet size={24} className="mx-auto mb-2" style={{ color: "var(--line)" }} />
+          <p className="text-sm mb-3" style={{ color: "var(--ink-soft)" }}>
             Preencha o campo "Banco / Conta" nos seus lançamentos para acompanhar o saldo de cada uma.
           </p>
-          <button onClick={() => setActiveTab("lancamentos")} className="rz-btn-primary rz-focus text-sm">
-            Ir para Lançamentos
-          </button>
+          <button onClick={() => setActiveTab("lancamentos")} className="rz-btn-primary rz-focus text-sm">Ir para Lançamentos</button>
         </div>
       ) : (
-        <div className="rz-card overflow-hidden">
+        <div className="rz-card overflow-hidden mb-6">
           {linhas.map((c, i) => (
             <div key={c.id} className="flex items-center gap-3 px-4 py-3" style={{ borderTop: i === 0 ? "none" : "1px solid var(--line)" }}>
               <span className="rz-dot" style={{ background: c.color }} />
@@ -4225,19 +4364,13 @@ function CarteiraTab({ transactions, banksList, setActiveTab }) {
                 <div className="text-sm truncate" style={c.id === "__sem__" ? { color: "var(--ink-soft)" } : undefined}>{c.label}</div>
                 <div className="text-xs" style={{ color: "var(--ink-soft)" }}>
                   {c.movimentos} lançamento{c.movimentos !== 1 ? "s" : ""}
-                  {c.pendente !== 0 && (
-                    <span style={{ color: "var(--gold)" }}> · {formatCurrency(c.pendente)} pendente</span>
-                  )}
+                  {c.pendente !== 0 && <span style={{ color: "var(--gold)" }}> · {formatCurrency(c.pendente)} pendente</span>}
                 </div>
               </div>
               <div className="text-right shrink-0">
-                <div className="rz-mono text-sm font-semibold whitespace-nowrap" style={{ color: c.saldo >= 0 ? "var(--emerald)" : "var(--brick)" }}>
-                  {formatCurrency(c.saldo)}
-                </div>
+                <div className="rz-mono text-sm font-semibold whitespace-nowrap" style={{ color: c.saldo >= 0 ? "var(--emerald)" : "var(--brick)" }}>{formatCurrency(c.saldo)}</div>
                 {c.pendente !== 0 && (
-                  <div className="rz-mono text-[11px] whitespace-nowrap" style={{ color: "var(--ink-soft)" }}>
-                    previsto {formatCurrency(c.saldo + c.pendente)}
-                  </div>
+                  <div className="rz-mono text-[11px] whitespace-nowrap" style={{ color: "var(--ink-soft)" }}>previsto {formatCurrency(c.saldo + c.pendente)}</div>
                 )}
               </div>
             </div>
@@ -4245,13 +4378,122 @@ function CarteiraTab({ transactions, banksList, setActiveTab }) {
         </div>
       )}
 
+      <h2 className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: "var(--ink-soft)" }}>Faturas dos cartões</h2>
+      <PeriodNavigator periodMode="mes" refDate={refDate} shiftMonth={shiftMonth} setPeriodMode={() => {}} hideToggle />
+
+      {faturas.length === 0 ? (
+        <div className="rz-card p-8 text-center">
+          <CreditCard size={24} className="mx-auto mb-2" style={{ color: "var(--line)" }} />
+          <p className="text-sm" style={{ color: "var(--ink-soft)" }}>
+            Nenhum cartão cadastrado. Em Configurações → Contas e Bancos, marque a opção "É um cartão de crédito" ao cadastrar.
+          </p>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-4">
+          {faturas.map((f) => <FaturaCard key={f.id} fatura={f} findCategory={findCategory} />)}
+        </div>
+      )}
+
       <p className="text-xs mt-4" style={{ color: "var(--ink-soft)" }}>
-        O saldo considera apenas lançamentos marcados como pagos. Os pendentes aparecem como "previsto".
+        A fatura soma as despesas lançadas no cartão dentro do período de fechamento. Ao pagá-la, registre uma transferência da sua conta para o cartão.
       </p>
     </div>
   );
 }
 
+function FaturaCard({ fatura, findCategory }) {
+  const [open, setOpen] = useState(false);
+
+  const porCategoria = useMemo(() => {
+    const map = {};
+    fatura.itens.forEach((t) => { map[t.category] = (map[t.category] || 0) + t.amount; });
+    return Object.entries(map)
+      .map(([id, v]) => ({ ...findCategory("despesa", id), total: v }))
+      .sort((a, b) => b.total - a.total);
+  }, [fatura.itens, findCategory]);
+
+  const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+  const vencida = fatura.vencimento && fatura.vencimento < hoje && fatura.aberto > 0;
+
+  return (
+    <div className="rz-card p-4 sm:p-5">
+      <div className="flex items-center justify-between gap-3 flex-wrap mb-1">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="rz-dot" style={{ background: fatura.color }} />
+          <span className="text-sm font-medium truncate">{fatura.label}</span>
+        </div>
+        <div className="text-right">
+          <div className="rz-mono text-lg font-semibold whitespace-nowrap" style={{ color: fatura.aberto > 0 ? "var(--brick)" : "var(--emerald)" }}>
+            {formatCurrency(fatura.aberto)}
+          </div>
+          <div className="text-[11px]" style={{ color: "var(--ink-soft)" }}>
+            {fatura.aberto > 0 ? "em aberto" : "fatura paga"}
+          </div>
+        </div>
+      </div>
+
+      <p className="text-xs" style={{ color: "var(--ink-soft)" }}>
+        {fatura.itens.length} compra{fatura.itens.length !== 1 ? "s" : ""}
+        {fatura.closingDay
+          ? ` · ciclo ${formatDateBR(dateToISO(fatura.inicio))} a ${formatDateBR(dateToISO(fatura.fim))}`
+          : " neste mês"}
+        {fatura.pagamentos > 0 && ` · ${formatCurrency(fatura.pagamentos)} já pago`}
+      </p>
+
+      {fatura.vencimento && (
+        <p className="text-xs mt-1" style={{ color: vencida ? "var(--brick)" : "var(--ink-soft)" }}>
+          {vencida ? "Venceu em " : "Vence em "}{formatDateBR(dateToISO(fatura.vencimento))}
+        </p>
+      )}
+
+      {!fatura.closingDay && (
+        <p className="text-xs mt-2 px-3 py-2 rounded-lg" style={{ background: "var(--paper-alt)", color: "var(--ink-soft)" }}>
+          Sem dia de fechamento definido — a fatura está usando o mês do calendário. Ajuste em Configurações → Contas e Bancos.
+        </p>
+      )}
+
+      {porCategoria.length > 0 && (
+        <div className="mt-3 pt-3" style={{ borderTop: "1px solid var(--line)" }}>
+          <div className="text-[11px] uppercase tracking-wide mb-2" style={{ color: "var(--ink-soft)" }}>Onde você gastou</div>
+          <div className="flex flex-col gap-1.5">
+            {porCategoria.map((c) => {
+              const pct = fatura.total > 0 ? (c.total / fatura.total) * 100 : 0;
+              return (
+                <div key={c.label} className="flex items-center gap-2">
+                  <span className="rz-dot" style={{ background: c.color }} />
+                  <span className="text-xs flex-1 truncate">{c.label}</span>
+                  <div className="rz-progress-track shrink-0" style={{ width: 70 }}>
+                    <div className="rz-progress-fill" style={{ width: `${pct}%`, background: c.color }} />
+                  </div>
+                  <span className="rz-mono text-xs font-semibold w-20 text-right whitespace-nowrap">{formatCurrency(c.total)}</span>
+                </div>
+              );
+            })}
+          </div>
+
+          <button onClick={() => setOpen((v) => !v)} className="rz-focus text-xs font-medium mt-3" style={{ color: "var(--ink-soft)" }}>
+            {open ? "Ocultar" : "Ver"} compras da fatura
+          </button>
+          {open && (
+            <div className="flex flex-col mt-2 max-h-64 overflow-y-auto">
+              {fatura.itens.map((t) => {
+                const cat = findCategory("despesa", t.category);
+                return (
+                  <div key={t.id} className="flex items-center gap-2 py-2" style={{ borderTop: "1px solid var(--line)" }}>
+                    <span className="rz-dot" style={{ background: cat.color }} />
+                    <span className="rz-mono text-[11px] shrink-0" style={{ color: "var(--ink-soft)" }}>{formatDateBR(t.date)}</span>
+                    <span className="text-xs flex-1 truncate">{t.description}</span>
+                    <span className="rz-mono text-xs font-semibold whitespace-nowrap" style={{ color: "var(--brick)" }}>{formatCurrency(t.amount)}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function CaixinhasTab({ boxes, savingsForm, setSavingsForm, savingsError, onAdd, onDelete, onContribute, onDeleteHistoryEntry, onUpdate, onArchive, onMove, onTransfer, onAdjust, banksList }) {
   const [showTransfer, setShowTransfer] = useState(false);
@@ -4698,11 +4940,11 @@ function CaixinhaCard({ box, primeira, ultima, onDelete, onContribute, onDeleteH
 }
 
 
-function VisaoGeralTab({ transactions, periodFiltered, totals, refDate, periodMode, shiftMonth, setPeriodMode, findCategory, setActiveTab, fixedBills, findBank, onLaunchFixedBill, savingsAccounts, saldosIniciais }) {
+function VisaoGeralTab({ transactions, periodFiltered, totals, refDate, periodMode, shiftMonth, setPeriodMode, findCategory, setActiveTab, fixedBills, findBank, onLaunchFixedBill, savingsAccounts, saldosIniciais, cardIds }) {
   const saldoTotal = useMemo(
     () => saldosIniciais + transactions.filter((t) => t.status === "pago")
-      .reduce((s, t) => s + efeitoNoSaldoGeral(t), 0),
-    [transactions, saldosIniciais]
+      .reduce((s, t) => s + efeitoNoSaldoGeral(t, cardIds), 0),
+    [transactions, saldosIniciais, cardIds]
   );
 
   const savingsTotal = useMemo(() => savingsAccounts.reduce((s, a) => s + a.currentAmount, 0), [savingsAccounts]);
@@ -4715,12 +4957,12 @@ function VisaoGeralTab({ transactions, periodFiltered, totals, refDate, periodMo
       : new Date(refDate.getFullYear(), refDate.getMonth() + 1, 0, 23, 59, 59);
     const pendentes = transactions
       .filter((t) => t.status === "pendente" && new Date(t.date + "T00:00:00") <= endOfPeriod)
-      .reduce((s, t) => s + efeitoNoSaldoGeral(t), 0);
+      .reduce((s, t) => s + efeitoNoSaldoGeral(t, cardIds), 0);
     const fixasNaoLancadas = periodMode === "todos" ? 0 : enrichFixedBills(fixedBills, transactions, refDate)
       .filter((b) => b.active && b.status !== "lancada")
       .reduce((s, b) => s + (b.type === "receita" ? b.amount : -b.amount), 0);
     return saldoTotal + pendentes + fixasNaoLancadas;
-  }, [transactions, fixedBills, refDate, periodMode, saldoTotal]);
+  }, [transactions, fixedBills, refDate, periodMode, saldoTotal, cardIds]);
 
   const pendingFixedBills = useMemo(() => {
     return enrichFixedBills(fixedBills, transactions, refDate)
@@ -4737,7 +4979,7 @@ function VisaoGeralTab({ transactions, periodFiltered, totals, refDate, periodMo
       const endOfMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59);
       const saldo = saldosIniciais + transactions
         .filter((t) => t.status === "pago" && new Date(t.date + "T00:00:00") <= endOfMonth)
-        .reduce((s, t) => s + efeitoNoSaldoGeral(t), 0);
+        .reduce((s, t) => s + efeitoNoSaldoGeral(t, cardIds), 0);
       return { mes: `${MONTHS[d.getMonth()].slice(0, 3)}/${String(d.getFullYear()).slice(2)}`, saldo };
     });
   }, [transactions, refDate]);
@@ -4967,6 +5209,40 @@ function BancosTab({ banksList, customBanks, bankForm, setBankForm, bankError, o
           O saldo inicial é quanto a conta já tinha antes de você começar a usar o Razão. Ele entra no saldo, mas não conta como receita.
         </p>
 
+        <div className="flex items-center gap-4 mb-3 flex-wrap">
+          <button
+            type="button"
+            onClick={() => setBankForm({ ...bankForm, kind: bankForm.kind === "cartao" ? "conta" : "cartao" })}
+            className="rz-focus flex items-center gap-2 text-sm"
+          >
+            <span style={{
+              width: 16, height: 16, borderRadius: 4, border: "1.5px solid var(--line)",
+              background: bankForm.kind === "cartao" ? "var(--ink)" : "var(--surface)",
+              display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+            }}>
+              {bankForm.kind === "cartao" && <Check size={12} color="var(--paper)" />}
+            </span>
+            É um cartão de crédito
+          </button>
+          {bankForm.kind === "cartao" && (
+            <>
+              <div className="flex items-center gap-2">
+                <label className="text-xs" style={{ color: "var(--ink-soft)" }}>Fecha dia</label>
+                <input type="number" min="1" max="31" className="rz-input rz-focus rz-mono" style={{ width: 68 }} placeholder="--" value={bankForm.closingDay} onChange={(e) => setBankForm({ ...bankForm, closingDay: e.target.value })} />
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-xs" style={{ color: "var(--ink-soft)" }}>Vence dia</label>
+                <input type="number" min="1" max="31" className="rz-input rz-focus rz-mono" style={{ width: 68 }} placeholder="--" value={bankForm.dueDay} onChange={(e) => setBankForm({ ...bankForm, dueDay: e.target.value })} />
+              </div>
+            </>
+          )}
+        </div>
+        {bankForm.kind === "cartao" && (
+          <p className="text-xs mb-3" style={{ color: "var(--ink-soft)" }}>
+            <strong>Fechamento</strong> é quando a fatura fecha (compras depois dessa data caem na próxima). <strong>Vencimento</strong> é o dia de pagar.
+          </p>
+        )}
+
         <div className="flex flex-wrap gap-2 mb-1">
           {COLOR_PALETTE.map((color) => (
             <button
@@ -5119,15 +5395,26 @@ function CategoryRow({ cat, isFirst, isCustom, onDelete, onUpdate, isBank, onMov
   const [tempLabel, setTempLabel] = useState(cat.label);
   const [tempColor, setTempColor] = useState(cat.color);
   const [tempInitial, setTempInitial] = useState(String(cat.initialBalance ?? ""));
+  const [tempKind, setTempKind] = useState(cat.kind || "conta");
+  const [tempClosing, setTempClosing] = useState(cat.closingDay ? String(cat.closingDay) : "");
+  const [tempDue, setTempDue] = useState(cat.dueDay ? String(cat.dueDay) : "");
 
   const startEdit = () => {
     setTempLabel(cat.label); setTempColor(cat.color);
     setTempInitial(String(cat.initialBalance ?? ""));
+    setTempKind(cat.kind || "conta");
+    setTempClosing(cat.closingDay ? String(cat.closingDay) : "");
+    setTempDue(cat.dueDay ? String(cat.dueDay) : "");
     setEditing(true);
   };
   const save = () => {
     if (!tempLabel.trim()) return;
-    const extra = isBank ? { initialBalance: parseFloat(String(tempInitial).replace(",", ".")) || 0 } : {};
+    const extra = isBank ? {
+      initialBalance: parseFloat(String(tempInitial).replace(",", ".")) || 0,
+      kind: tempKind,
+      closingDay: tempKind === "cartao" ? (parseInt(tempClosing, 10) || null) : null,
+      dueDay: tempKind === "cartao" ? (parseInt(tempDue, 10) || null) : null,
+    } : {};
     onUpdate(cat, tempLabel, tempColor, extra);
     setEditing(false);
   };
@@ -5158,6 +5445,32 @@ function CategoryRow({ cat, isFirst, isCustom, onDelete, onUpdate, isBank, onMov
           ))}
         </div>
         {isBank && (
+          <div className="flex items-center gap-4 mt-3 flex-wrap">
+            <button type="button" onClick={() => setTempKind(tempKind === "cartao" ? "conta" : "cartao")} className="rz-focus flex items-center gap-2 text-sm">
+              <span style={{
+                width: 15, height: 15, borderRadius: 4, border: "1.5px solid var(--line)",
+                background: tempKind === "cartao" ? "var(--ink)" : "var(--surface)",
+                display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+              }}>
+                {tempKind === "cartao" && <Check size={11} color="var(--paper)" />}
+              </span>
+              Cartão de crédito
+            </button>
+            {tempKind === "cartao" && (
+              <>
+                <div className="flex items-center gap-1.5">
+                  <label className="text-xs" style={{ color: "var(--ink-soft)" }}>Fecha</label>
+                  <input type="number" min="1" max="31" className="rz-input rz-focus rz-mono text-sm" style={{ width: 62 }} value={tempClosing} onChange={(e) => setTempClosing(e.target.value)} />
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <label className="text-xs" style={{ color: "var(--ink-soft)" }}>Vence</label>
+                  <input type="number" min="1" max="31" className="rz-input rz-focus rz-mono text-sm" style={{ width: 62 }} value={tempDue} onChange={(e) => setTempDue(e.target.value)} />
+                </div>
+              </>
+            )}
+          </div>
+        )}
+        {isBank && tempKind !== "cartao" && (
           <div className="flex items-center gap-2 mt-3">
             <label className="text-xs" style={{ color: "var(--ink-soft)" }}>Saldo inicial</label>
             <input
@@ -5180,7 +5493,11 @@ function CategoryRow({ cat, isFirst, isCustom, onDelete, onUpdate, isBank, onMov
       <span className="rz-dot" style={{ background: cat.color }} />
       <div className="flex-1 min-w-0">
         <div className="text-sm truncate">{cat.label}</div>
-        {isBank && cat.initialBalance ? (
+        {isBank && cat.kind === "cartao" ? (
+          <div className="text-xs" style={{ color: "var(--ink-soft)" }}>
+            Cartão{cat.closingDay ? ` · fecha dia ${cat.closingDay}` : ""}{cat.dueDay ? ` · vence dia ${cat.dueDay}` : ""}
+          </div>
+        ) : isBank && cat.initialBalance ? (
           <div className="text-xs" style={{ color: "var(--ink-soft)" }}>Saldo inicial: {formatCurrency(cat.initialBalance)}</div>
         ) : null}
       </div>
