@@ -1182,6 +1182,22 @@ export default function App() {
     setTransactions((prev) => prev.filter((t) => !(t.recurringId === bill.id && t.recurringPeriod === period)));
   };
 
+  const handleAdjustSavingsBalance = (boxId, novoSaldo) => {
+    const box = savingsAccounts.find((s) => s.id === boxId);
+    if (!box) return;
+    const delta = Math.round((novoSaldo - box.currentAmount) * 100) / 100;
+    if (delta === 0) return;
+    setSavingsAccounts((prev) => prev.map((s) => (s.id === boxId ? {
+      ...s,
+      currentAmount: Math.max(0, novoSaldo),
+      history: [...(s.history || []), {
+        id: uid(), date: todayISO(), amount: delta,
+        note: delta > 0 ? "rendimento / ajuste" : "ajuste de saldo",
+        ajuste: true,
+      }],
+    } : s)));
+  };
+
   const handleUpdateSavingsBox = (id, patch) => {
     setSavingsAccounts((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
   };
@@ -1485,6 +1501,7 @@ export default function App() {
             onArchive={handleArchiveSavings}
             onMove={handleMoveSavings}
             onTransfer={handleTransferSavings}
+            onAdjust={handleAdjustSavingsBalance}
             banksList={banksList}
           />
         ) : activeTab === "config" ? (
@@ -1727,13 +1744,13 @@ export default function App() {
                   );
                   const editDeleteBtns = (
                     <div className="flex items-center gap-1 shrink-0">
-                      <button onClick={() => handleDuplicate(t)} className="rz-focus p-1.5 rounded-md hover:bg-[var(--paper-alt)]" aria-label="Duplicar" title="Duplicar lançamento" style={{ color: "var(--ink-soft)" }}>
+                      <button onClick={() => handleDuplicate(t)} className="rz-focus p-1.5 rounded-md" aria-label="Duplicar" title="Duplicar lançamento" style={{ color: "var(--ink-soft)" }}>
                         <Copy size={15} />
                       </button>
-                      <button onClick={() => openEditForm(t)} className="rz-focus p-1.5 rounded-md hover:bg-[var(--paper-alt)]" aria-label="Editar" style={{ color: "var(--ink-soft)" }}>
+                      <button onClick={() => openEditForm(t)} className="rz-focus p-1.5 rounded-md" aria-label="Editar" style={{ color: "var(--ink-soft)" }}>
                         <Pencil size={15} />
                       </button>
-                      <button onClick={() => handleDelete(t)} className="rz-focus p-1.5 rounded-md hover:bg-[var(--paper-alt)]" aria-label="Excluir" style={{ color: "var(--ink-soft)" }}>
+                      <button onClick={() => handleDelete(t)} className="rz-focus p-1.5 rounded-md" aria-label="Excluir" style={{ color: "var(--ink-soft)" }}>
                         <Trash2 size={15} />
                       </button>
                     </div>
@@ -4182,7 +4199,7 @@ function CarteiraTab({ transactions, banksList, setActiveTab }) {
 }
 
 
-function CaixinhasTab({ boxes, savingsForm, setSavingsForm, savingsError, onAdd, onDelete, onContribute, onDeleteHistoryEntry, onUpdate, onArchive, onMove, onTransfer, banksList }) {
+function CaixinhasTab({ boxes, savingsForm, setSavingsForm, savingsError, onAdd, onDelete, onContribute, onDeleteHistoryEntry, onUpdate, onArchive, onMove, onTransfer, onAdjust, banksList }) {
   const [showTransfer, setShowTransfer] = useState(false);
   const [transfer, setTransfer] = useState({ origem: "", destino: "", valor: "" });
   const [transferError, setTransferError] = useState("");
@@ -4283,6 +4300,7 @@ function CaixinhasTab({ boxes, savingsForm, setSavingsForm, savingsError, onAdd,
               onUpdate={onUpdate}
               onArchive={onArchive}
               onMove={onMove}
+              onAdjust={onAdjust}
               banksList={banksList}
             />
           ))}
@@ -4358,8 +4376,10 @@ function CaixinhasTab({ boxes, savingsForm, setSavingsForm, savingsError, onAdd,
   );
 }
 
-function CaixinhaCard({ box, primeira, ultima, onDelete, onContribute, onDeleteHistoryEntry, onUpdate, onArchive, onMove, banksList }) {
+function CaixinhaCard({ box, primeira, ultima, onDelete, onContribute, onDeleteHistoryEntry, onUpdate, onArchive, onMove, onAdjust, banksList }) {
   const [amount, setAmount] = useState("");
+  const [editandoSaldo, setEditandoSaldo] = useState(false);
+  const [tempSaldo, setTempSaldo] = useState("");
   const [contaOrigem, setContaOrigem] = useState("");
   const [showHistory, setShowHistory] = useState(false);
   const [showSim, setShowSim] = useState(false);
@@ -4453,10 +4473,43 @@ function CaixinhaCard({ box, primeira, ultima, onDelete, onContribute, onDeleteH
       ) : (
         <>
           <div className="text-[11px] uppercase tracking-wide mb-0.5" style={{ color: "var(--ink-soft)" }}>Guardado</div>
-          <div className="flex items-baseline justify-between mb-2 gap-2">
-            <span className="rz-mono text-xl font-semibold" style={{ color: done ? "var(--emerald)" : "var(--ink)" }}>{formatCurrency(atual)}</span>
-            {temAlvo && <span className="rz-mono text-xs whitespace-nowrap" style={{ color: "var(--ink-soft)" }}>de {formatCurrency(box.targetAmount)}</span>}
-          </div>
+          {editandoSaldo ? (
+            <div className="mb-2">
+              <div className="flex items-center gap-2">
+                <input
+                  className="rz-input rz-focus rz-mono text-sm flex-1"
+                  inputMode="decimal"
+                  value={tempSaldo}
+                  onChange={(e) => setTempSaldo(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") { const v = parseFloat(String(tempSaldo).replace(",", ".")); if (!isNaN(v) && v >= 0) { onAdjust(box.id, v); setEditandoSaldo(false); } }
+                    if (e.key === "Escape") setEditandoSaldo(false);
+                  }}
+                  autoFocus
+                />
+                <button
+                  onClick={() => { const v = parseFloat(String(tempSaldo).replace(",", ".")); if (!isNaN(v) && v >= 0) { onAdjust(box.id, v); setEditandoSaldo(false); } }}
+                  className="rz-focus p-1.5 rounded-md" style={{ color: "var(--emerald)" }} aria-label="Salvar saldo" title="Salvar novo saldo"
+                ><Check size={16} /></button>
+                <button onClick={() => setEditandoSaldo(false)} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--ink-soft)" }} aria-label="Cancelar" title="Cancelar edição"><X size={16} /></button>
+              </div>
+              <p className="text-xs mt-1" style={{ color: "var(--ink-soft)" }}>
+                A diferença fica registrada no histórico como ajuste.
+              </p>
+            </div>
+          ) : (
+            <div className="flex items-baseline justify-between mb-2 gap-2">
+              <button
+                onClick={() => { setTempSaldo(String(atual)); setEditandoSaldo(true); }}
+                className="rz-focus rz-mono text-xl font-semibold text-left"
+                style={{ color: done ? "var(--emerald)" : "var(--ink)", borderBottom: "1px dashed var(--line)" }}
+                title="Clique para corrigir o saldo (ex: rendimento do banco)"
+              >
+                {formatCurrency(atual)}
+              </button>
+              {temAlvo && <span className="rz-mono text-xs whitespace-nowrap" style={{ color: "var(--ink-soft)" }}>de {formatCurrency(box.targetAmount)}</span>}
+            </div>
+          )}
 
           {temAlvo && (
             <>

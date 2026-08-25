@@ -84,6 +84,10 @@
 
         .rz-focus:focus-visible { outline: 2px solid var(--emerald); outline-offset: 2px; }
 
+        /* Todos os botões de ícone (pequenos, arredondados) ganham o mesmo hover */
+        button.rz-focus.rounded-md { transition: background .12s; }
+        button.rz-focus.rounded-md:hover:not(:disabled) { background: var(--paper-alt); }
+
         @media (prefers-reduced-motion: reduce) {
           .rz-app * { transition: none !important; animation: none !important; }
         }
