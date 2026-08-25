@@ -2452,7 +2452,7 @@ function TemaSection({ theme, setTheme }) {
                   onChange={(e) => updateColor(f.key, e.target.value)}
                   className="rz-focus"
                   style={{ width: 40, height: 32, border: "1px solid var(--line)", borderRadius: 6, padding: 2, background: "var(--surface)", cursor: "pointer" }}
-                  aria-label={`Cor: ${f.label} title="Usar esta cor"`}
+                  aria-label={`Cor: ${f.label}`} title="Usar esta cor"
                 />
               </div>
             </div>
@@ -4273,7 +4273,7 @@ function CaixinhasTab({ boxes, savingsForm, setSavingsForm, savingsError, onAdd,
               onClick={() => setSavingsForm({ ...savingsForm, color })}
               className="rz-focus w-6 h-6 rounded-full"
               style={{ background: color, boxShadow: savingsForm.color === color ? "0 0 0 2px var(--surface), 0 0 0 4px var(--ink)" : "none" }}
-              aria-label={`Cor ${color} title="Usar esta cor"`}
+              aria-label={`Cor ${color}`} title="Usar esta cor"
             />
           ))}
         </div>
@@ -4879,7 +4879,7 @@ function VisaoGeralTab({ transactions, periodFiltered, totals, refDate, periodMo
 
 function BancosTab({ banksList, customBanks, bankForm, setBankForm, bankError, onAdd, onDelete, onUpdate, hiddenCount, onRestore }) {
   return (
-    <div className="max-w-2xl">
+    <div>
       <header className="mb-6">
         <h1 className="rz-display text-2xl md:text-3xl">Contas e Bancos</h1>
         <p className="text-sm mt-1" style={{ color: "var(--ink-soft)" }}>
@@ -4923,7 +4923,7 @@ function BancosTab({ banksList, customBanks, bankForm, setBankForm, bankError, o
                 background: color,
                 boxShadow: bankForm.color === color ? "0 0 0 2px var(--surface), 0 0 0 4px var(--ink)" : "none",
               }}
-              aria-label={`Cor ${color} title="Usar esta cor"`}
+              aria-label={`Cor ${color}`} title="Usar esta cor"
             />
           ))}
         </div>
@@ -4934,14 +4934,23 @@ function BancosTab({ banksList, customBanks, bankForm, setBankForm, bankError, o
         <h3 className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--ink-soft)" }}>Seus bancos e carteiras</h3>
         {hiddenCount > 0 && (
           <button onClick={onRestore} className="rz-focus text-xs font-medium" style={{ color: "var(--emerald)" }}>
-            Restaurar {hiddenCount} padrão{hiddenCount > 1 ? "ões" : ""} removido{hiddenCount > 1 ? "s" : ""}
+            Restaurar {hiddenCount} {hiddenCount > 1 ? "padrões removidos" : "padrão removido"}
           </button>
         )}
       </div>
-      <div className="rz-card overflow-hidden">
-        {banksList.map((b, i) => (
-          <CategoryRow key={b.id} cat={b} isFirst={i === 0} isCustom={customBanks.some((x) => x.id === b.id)} onDelete={onDelete} onUpdate={onUpdate} isBank />
-        ))}
+      <div className="grid lg:grid-cols-2 gap-4">
+        <div className="rz-card overflow-hidden h-fit">
+          {banksList.filter((_, i) => i % 2 === 0).map((b, i) => (
+            <CategoryRow key={b.id} cat={b} isFirst={i === 0} isCustom={customBanks.some((x) => x.id === b.id)} onDelete={onDelete} onUpdate={onUpdate} isBank />
+          ))}
+        </div>
+        {banksList.length > 1 && (
+          <div className="rz-card overflow-hidden h-fit">
+            {banksList.filter((_, i) => i % 2 === 1).map((b, i) => (
+              <CategoryRow key={b.id} cat={b} isFirst={i === 0} isCustom={customBanks.some((x) => x.id === b.id)} onDelete={onDelete} onUpdate={onUpdate} isBank />
+            ))}
+          </div>
+        )}
       </div>
       <p className="text-xs mt-4" style={{ color: "var(--ink-soft)" }}>
         Excluir um banco não apaga lançamentos que já usam ele — eles continuam aparecendo normalmente.
@@ -4952,7 +4961,7 @@ function BancosTab({ banksList, customBanks, bankForm, setBankForm, bankError, o
 
 function CategoriasTab({ categoriesByType, customCategories, categoryForm, setCategoryForm, categoryError, onAdd, onDelete, onUpdate, hiddenCount, onRestore }) {
   return (
-    <div className="max-w-4xl">
+    <div>
       <header className="mb-6 flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="rz-display text-2xl md:text-3xl">Categorias</h1>
@@ -4962,7 +4971,7 @@ function CategoriasTab({ categoriesByType, customCategories, categoryForm, setCa
         </div>
         {hiddenCount > 0 && (
           <button onClick={onRestore} className="rz-focus text-xs font-medium" style={{ color: "var(--emerald)" }}>
-            Restaurar {hiddenCount} padrão{hiddenCount > 1 ? "ões" : ""} removido{hiddenCount > 1 ? "s" : ""}
+            Restaurar {hiddenCount} {hiddenCount > 1 ? "padrões removidos" : "padrão removido"}
           </button>
         )}
       </header>
@@ -4999,7 +5008,7 @@ function CategoriasTab({ categoriesByType, customCategories, categoryForm, setCa
                 background: color,
                 boxShadow: categoryForm.color === color ? "0 0 0 2px var(--surface), 0 0 0 4px var(--ink)" : "none",
               }}
-              aria-label={`Cor ${color} title="Usar esta cor"`}
+              aria-label={`Cor ${color}`} title="Usar esta cor"
             />
           ))}
         </div>
@@ -5072,7 +5081,7 @@ function CategoryRow({ cat, isFirst, isCustom, onDelete, onUpdate, isBank }) {
               onClick={() => setTempColor(color)}
               className="rz-focus w-5 h-5 rounded-full"
               style={{ background: color, boxShadow: tempColor === color ? "0 0 0 2px var(--surface), 0 0 0 3px var(--ink)" : "none" }}
-              aria-label={`Cor ${color} title="Usar esta cor"`}
+              aria-label={`Cor ${color}`} title="Usar esta cor"
             />
           ))}
         </div>
