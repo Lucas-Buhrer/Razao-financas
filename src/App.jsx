@@ -1699,11 +1699,13 @@ export default function App() {
                       <button onClick={() => handleDelete(t)} className="rz-focus p-1.5 rounded-md" aria-label="Excluir" title={t.installmentTotal ? "Excluir só esta parcela" : "Excluir"} style={{ color: "var(--ink-soft)" }}>
                         <Trash2 size={15} />
                       </button>
-                      {t.installmentGroupId && (
-                        <button onClick={() => handleDeleteInstallmentGroup(t)} className="rz-focus p-1.5 rounded-md" aria-label="Excluir todas as parcelas" title={`Excluir todas as ${t.installmentTotal} parcelas`} style={{ color: "var(--brick)" }}>
-                          <Layers size={15} />
-                        </button>
-                      )}
+                      <div className="w-7 shrink-0 flex justify-center">
+                        {t.installmentGroupId && (
+                          <button onClick={() => handleDeleteInstallmentGroup(t)} className="rz-focus p-1.5 rounded-md" aria-label="Excluir todas as parcelas" title={`Excluir todas as ${t.installmentTotal} parcelas`} style={{ color: "var(--brick)" }}>
+                            <Layers size={15} />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   );
 
