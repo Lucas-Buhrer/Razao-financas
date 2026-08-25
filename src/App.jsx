@@ -1303,7 +1303,15 @@ export default function App() {
             onResetData={resetAllData}
           />
         ) : activeTab === "relatorios" ? (
-          <ReportsTab transactions={transactions} findCategory={findCategory} fixedBills={fixedBills} savingsAccounts={savingsAccounts} saldosIniciais={saldosIniciais} />
+          <ReportsTab
+            transactions={transactions}
+            findCategory={findCategory}
+            fixedBills={fixedBills}
+            savingsAccounts={savingsAccounts}
+            saldosIniciais={saldosIniciais}
+            budgets={budgets}
+            categoriesByType={categoriesByType}
+          />
         ) : activeTab === "orcamento" ? (
           <OrcamentoTab
             budgets={budgets}
@@ -2181,9 +2189,10 @@ function TemaSection({ theme, setTheme }) {
   );
 }
 
-function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, saldosIniciais }) {
+function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, saldosIniciais, budgets, categoriesByType }) {
   const [monthsCount, setMonthsCount] = useState(6);
   const [horizonDays, setHorizonDays] = useState(90);
+  const [selectedCats, setSelectedCats] = useState([]);
   const today = new Date();
   const [customStart, setCustomStart] = useState(() => new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10));
   const [customEnd, setCustomEnd] = useState(() => todayISO());
@@ -2218,9 +2227,87 @@ function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, s
       const inMonth = transactions.filter((t) => { const td = new Date(t.date + "T00:00:00"); return td.getFullYear() === y && td.getMonth() === m; });
       const receitas = inMonth.filter((t) => t.type === "receita").reduce((s, t) => s + Number(t.amount), 0);
       const despesas = inMonth.filter((t) => t.type === "despesa").reduce((s, t) => s + Number(t.amount), 0);
-      return { mes: `${MONTHS[m].slice(0, 3)}/${String(y).slice(2)}`, receitas, despesas, saldo: receitas - despesas };
+      const porCategoria = {};
+      inMonth.filter((t) => t.type === "despesa").forEach((t) => {
+        porCategoria[t.category] = (porCategoria[t.category] || 0) + Number(t.amount);
+      });
+      return { mes: `${MONTHS[m].slice(0, 3)}/${String(y).slice(2)}`, receitas, despesas, saldo: receitas - despesas, porCategoria };
     });
   }, [transactions, monthsCount]);
+
+  // ---- Indicadores ----
+  const indicadores = useMemo(() => {
+    const comReceita = monthlyData.filter((m) => m.receitas > 0);
+    const receitaMedia = comReceita.length
+      ? comReceita.reduce((s, m) => s + m.receitas, 0) / comReceita.length : 0;
+    const despesaMedia = monthlyData.length
+      ? monthlyData.reduce((s, m) => s + m.despesas, 0) / monthlyData.length : 0;
+
+    // Taxa de poupança: quanto sobrou da receita, em média
+    const taxaPoupanca = comReceita.length
+      ? (comReceita.reduce((s, m) => s + (m.receitas - m.despesas) / m.receitas, 0) / comReceita.length) * 100
+      : null;
+
+    // Comprometimento: total de contas fixas ativas sobre a receita média
+    const totalFixas = fixedBills
+      .filter((b) => b.active && b.type === "despesa")
+      .reduce((s, b) => s + getAmountForPeriod(b, new Date()), 0);
+    const comprometimento = receitaMedia > 0 ? (totalFixas / receitaMedia) * 100 : null;
+
+    return { receitaMedia, despesaMedia, taxaPoupanca, totalFixas, comprometimento };
+  }, [monthlyData, fixedBills]);
+
+  // ---- Média mensal por categoria ----
+  const mediaPorCategoria = useMemo(() => {
+    const totais = {};
+    monthlyData.forEach((m) => {
+      Object.entries(m.porCategoria).forEach(([catId, v]) => {
+        totais[catId] = (totais[catId] || 0) + v;
+      });
+    });
+    return Object.entries(totais)
+      .map(([catId, total]) => {
+        const cat = findCategory("despesa", catId);
+        return { id: catId, name: cat.label, color: cat.color, total, media: total / (monthlyData.length || 1) };
+      })
+      .sort((a, b) => b.media - a.media);
+  }, [monthlyData, findCategory]);
+
+  // ---- Evolução por categoria (gráfico) ----
+  const evolucaoCategorias = useMemo(() => {
+    return monthlyData.map((m) => {
+      const linha = { mes: m.mes };
+      selectedCats.forEach((catId) => {
+        linha[catId] = m.porCategoria[catId] || 0;
+      });
+      return linha;
+    });
+  }, [monthlyData, selectedCats]);
+
+  // ---- Histórico de orçamento ----
+  const historicoOrcamento = useMemo(() => {
+    return budgets.map((b) => {
+      const cat = findCategory("despesa", b.categoryId);
+      const meses = monthlyData.map((m) => ({
+        mes: m.mes,
+        gasto: m.porCategoria[b.categoryId] || 0,
+        estourou: (m.porCategoria[b.categoryId] || 0) > b.limit,
+      }));
+      const estouros = meses.filter((m) => m.estourou).length;
+      const mediaGasto = meses.reduce((s, m) => s + m.gasto, 0) / (meses.length || 1);
+      return { ...b, name: cat.label, color: cat.color, meses, estouros, mediaGasto };
+    });
+  }, [budgets, monthlyData, findCategory]);
+
+  useEffect(() => {
+    if (selectedCats.length === 0 && mediaPorCategoria.length > 0) {
+      setSelectedCats(mediaPorCategoria.slice(0, 3).map((c) => c.id));
+    }
+  }, [mediaPorCategoria]);
+
+  const toggleCat = (id) => {
+    setSelectedCats((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
 
   const customRangeData = useMemo(() => {
     if (!customStart || !customEnd) return null;
@@ -2305,6 +2392,154 @@ function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, s
           </table>
         </div>
       </div>
+
+      {/* Indicadores */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
+        <div className="rz-card p-4">
+          <div className="text-xs mb-1" style={{ color: "var(--ink-soft)" }}>Taxa de poupança</div>
+          <div className="rz-mono text-xl font-semibold" style={{ color: indicadores.taxaPoupanca >= 0 ? "var(--emerald)" : "var(--brick)" }}>
+            {indicadores.taxaPoupanca === null ? "—" : `${indicadores.taxaPoupanca.toFixed(0)}%`}
+          </div>
+          <p className="text-xs mt-1" style={{ color: "var(--ink-soft)" }}>
+            Do que você ganha, quanto sobra em média
+          </p>
+        </div>
+
+        <div className="rz-card p-4">
+          <div className="text-xs mb-1" style={{ color: "var(--ink-soft)" }}>Comprometido com fixas</div>
+          <div className="rz-mono text-xl font-semibold" style={{ color: indicadores.comprometimento > 70 ? "var(--brick)" : indicadores.comprometimento > 50 ? "var(--gold)" : "var(--emerald)" }}>
+            {indicadores.comprometimento === null ? "—" : `${indicadores.comprometimento.toFixed(0)}%`}
+          </div>
+          <p className="text-xs mt-1" style={{ color: "var(--ink-soft)" }}>
+            {formatCurrency(indicadores.totalFixas)} de contas fixas por mês
+          </p>
+        </div>
+
+        <div className="rz-card p-4">
+          <div className="text-xs mb-1" style={{ color: "var(--ink-soft)" }}>Médias mensais</div>
+          <div className="rz-mono text-sm">
+            <span style={{ color: "var(--emerald)" }}>+{formatCurrency(indicadores.receitaMedia)}</span>
+          </div>
+          <div className="rz-mono text-sm">
+            <span style={{ color: "var(--brick)" }}>−{formatCurrency(indicadores.despesaMedia)}</span>
+          </div>
+          <p className="text-xs mt-1" style={{ color: "var(--ink-soft)" }}>
+            Nos últimos {monthsCount} meses
+          </p>
+        </div>
+      </div>
+
+      {/* Evolução por categoria */}
+      {mediaPorCategoria.length > 0 && (
+        <div className="rz-card p-4 sm:p-5 mb-6">
+          <h2 className="text-sm font-semibold mb-1">Evolução por categoria</h2>
+          <p className="text-xs mb-3" style={{ color: "var(--ink-soft)" }}>
+            Escolha as categorias para comparar a tendência de gasto ao longo dos meses.
+          </p>
+
+          <div className="flex flex-wrap gap-2 mb-4">
+            {mediaPorCategoria.slice(0, 12).map((c) => {
+              const ativo = selectedCats.includes(c.id);
+              return (
+                <button
+                  key={c.id}
+                  onClick={() => toggleCat(c.id)}
+                  className="rz-focus text-xs px-3 py-1.5 rounded-full flex items-center gap-1.5"
+                  style={ativo
+                    ? { background: c.color, color: "#fff" }
+                    : { background: "var(--surface)", color: "var(--ink-soft)", border: "1px solid var(--line)" }}
+                >
+                  <span className="rz-dot" style={{ background: ativo ? "#fff" : c.color }} />
+                  {c.name}
+                </button>
+              );
+            })}
+          </div>
+
+          {selectedCats.length === 0 ? (
+            <p className="text-sm py-8 text-center" style={{ color: "var(--ink-soft)" }}>
+              Selecione ao menos uma categoria acima.
+            </p>
+          ) : (
+            <ResponsiveContainer width="100%" height={240}>
+              <LineChart data={evolucaoCategorias} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
+                <CartesianGrid stroke="var(--line)" vertical={false} />
+                <XAxis dataKey="mes" tick={{ fontSize: 11, fontFamily: "IBM Plex Mono, monospace", fill: "var(--ink-soft)" }} axisLine={{ stroke: "var(--line)" }} tickLine={false} />
+                <YAxis tickFormatter={formatCompact} tick={{ fontSize: 11, fontFamily: "IBM Plex Mono, monospace", fill: "var(--ink-soft)" }} axisLine={false} tickLine={false} width={48} />
+                <Tooltip formatter={(v) => formatCurrency(v)} contentStyle={tooltipStyle} labelStyle={{ color: "var(--ink)", fontWeight: 600 }} />
+                <Legend wrapperStyle={{ fontSize: 12, fontFamily: "Inter, sans-serif" }} />
+                {selectedCats.map((catId) => {
+                  const c = mediaPorCategoria.find((x) => x.id === catId);
+                  if (!c) return null;
+                  return <Line key={catId} type="monotone" dataKey={catId} name={c.name} stroke={c.color} strokeWidth={2.5} dot={{ r: 3, fill: c.color }} activeDot={{ r: 5 }} />;
+                })}
+              </LineChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+      )}
+
+      {/* Média mensal por categoria */}
+      {mediaPorCategoria.length > 0 && (
+        <div className="rz-card p-4 sm:p-5 mb-6">
+          <h2 className="text-sm font-semibold mb-1">Média mensal por categoria</h2>
+          <p className="text-xs mb-3" style={{ color: "var(--ink-soft)" }}>
+            Use como referência ao definir seus orçamentos.
+          </p>
+          <div className="flex flex-col">
+            {mediaPorCategoria.map((c, i) => (
+              <div key={c.id} className="flex items-center gap-3 py-2" style={{ borderTop: i === 0 ? "none" : "1px solid var(--line)" }}>
+                <span className="rz-dot" style={{ background: c.color }} />
+                <span className="text-sm flex-1 truncate">{c.name}</span>
+                <div className="text-right shrink-0">
+                  <div className="rz-mono text-sm font-semibold whitespace-nowrap">{formatCurrency(c.media)}<span className="text-xs font-normal" style={{ color: "var(--ink-soft)" }}>/mês</span></div>
+                  <div className="rz-mono text-[11px] whitespace-nowrap" style={{ color: "var(--ink-soft)" }}>{formatCurrency(c.total)} no total</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Histórico de orçamento */}
+      {historicoOrcamento.length > 0 && (
+        <div className="rz-card p-4 sm:p-5 mb-6">
+          <h2 className="text-sm font-semibold mb-1">Histórico de orçamento</h2>
+          <p className="text-xs mb-4" style={{ color: "var(--ink-soft)" }}>
+            Cada quadrinho é um mês. Vermelho significa que passou do limite.
+          </p>
+          <div className="flex flex-col gap-4">
+            {historicoOrcamento.map((b) => (
+              <div key={b.id}>
+                <div className="flex items-center justify-between gap-2 mb-1.5 flex-wrap">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="rz-dot" style={{ background: b.color }} />
+                    <span className="text-sm truncate">{b.name}</span>
+                  </div>
+                  <span className="rz-mono text-xs whitespace-nowrap" style={{ color: b.estouros > 0 ? "var(--brick)" : "var(--emerald)" }}>
+                    {b.estouros === 0 ? "sempre dentro do limite" : `estourou ${b.estouros}x de ${b.meses.length}`}
+                  </span>
+                </div>
+                <div className="flex gap-1 mb-1">
+                  {b.meses.map((m) => (
+                    <div
+                      key={m.mes}
+                      title={`${m.mes}: ${formatCurrency(m.gasto)} de ${formatCurrency(b.limit)}`}
+                      className="flex-1 rounded"
+                      style={{ height: 20, background: m.gasto === 0 ? "var(--paper-alt)" : m.estourou ? "var(--brick)" : "var(--emerald)", opacity: m.gasto === 0 ? 1 : 0.85 }}
+                    />
+                  ))}
+                </div>
+                <div className="text-xs" style={{ color: "var(--ink-soft)" }}>
+                  Limite {formatCurrency(b.limit)} · média gasta {formatCurrency(b.mediaGasto)}
+                  {b.mediaGasto > b.limit && <span style={{ color: "var(--brick)" }}> · seu limite parece baixo demais</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
 
       {/* Projected cash flow */}
       <div className="rz-card p-4 sm:p-5 mb-6">
