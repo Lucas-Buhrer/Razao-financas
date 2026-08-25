@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import Papa from "papaparse";
 import {
-  BookOpen, Home, Receipt, Repeat, Target, BarChart3, Landmark, Wallet,
+  BookOpen, Home, Receipt, Repeat, Target, BarChart3, Landmark, Wallet, HandCoins,
   Plus, Trash2, Pencil, X, Check, Search, ChevronLeft, ChevronRight,
   TrendingUp, TrendingDown, Scale, Undo2, Menu, AlertCircle, PauseCircle, PlayCircle,
   PiggyBank, Minus, PartyPopper, History, Settings, RotateCcw, LogOut, FileUp, FileDown, Users, Copy, Paperclip, Loader2,
@@ -53,6 +53,7 @@ const NAV_ITEMS = [
   { id: "carteira", label: "Contas", icon: Wallet, ready: true },
   { id: "orcamento", label: "Orçamento", icon: Target, ready: true },
   { id: "metas", label: "Metas", icon: PiggyBank, ready: true },
+  { id: "dividas", label: "Dívidas", icon: HandCoins, ready: true },
   { id: "relatorios", label: "Relatórios", icon: BarChart3, ready: true },
   { id: "config", label: "Configurações", icon: Settings, ready: true },
 ];
@@ -158,6 +159,41 @@ function parseImportedCsv(rawRows) {
   return { rows, error: null };
 }
 
+// Reduz a descrição a algumas palavras significativas, para reconhecer
+// lançamentos parecidos ("Vivo 08/2026" e "Vivo 09/2026" viram a mesma chave).
+function normalizeDesc(d) {
+  return String(d || "")
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z\s]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 2)
+    .slice(0, 4)
+    .join(" ");
+}
+
+// Monta um "aprendizado" a partir do que o usuário já categorizou antes:
+// para cada padrão de descrição, qual categoria ele mais usou.
+function buildCategoryMemory(transactions) {
+  const contagem = {};
+  transactions
+    .filter((t) => t.category && t.type !== "transferencia")
+    .forEach((t) => {
+      const chave = normalizeDesc(t.description);
+      if (!chave) return;
+      if (!contagem[chave]) contagem[chave] = {};
+      const k = `${t.type}|${t.category}`;
+      contagem[chave][k] = (contagem[chave][k] || 0) + 1;
+    });
+  const memoria = {};
+  Object.entries(contagem).forEach(([chave, cats]) => {
+    const [melhor] = Object.entries(cats).sort((a, b) => b[1] - a[1])[0];
+    const [tipo, catId] = melhor.split("|");
+    memoria[chave] = { tipo, catId };
+  });
+  return memoria;
+}
+
 function addMonthsToDateISO(dateISO, months) {
   const [y, m, d] = dateISO.split("-").map(Number);
   const target = new Date(y, m - 1 + months, 1);
@@ -167,6 +203,7 @@ function addMonthsToDateISO(dateISO, months) {
 }
 const emptyFixedForm = { description: "", amount: "", type: "despesa", category: "", account: "", dueDay: "5" };
 const emptyGoalForm = { title: "", targetAmount: "", deadline: "", color: COLOR_PALETTE[0] };
+const emptyDebtForm = { person: "", amount: "", direction: "emprestei", date: todayISO(), dueDate: "", notes: "" };
 
 const DEFAULT_THEME = { paper: "#eef1e7", ink: "#1e2b23", emerald: "#1b5e4f", brick: "#a83b2e", gold: "#b8873a" };
 const THEME_PRESETS = [
@@ -326,8 +363,18 @@ export default function App() {
   const [savingsForm, setSavingsForm] = useState({ label: "", color: COLOR_PALETTE[0] });
   const [savingsError, setSavingsError] = useState("");
 
+  const [debts, setDebts] = useState([]);
+  const [debtsLoaded, setDebtsLoaded] = useState(false);
+  const [debtForm, setDebtForm] = useState(emptyDebtForm);
+  const [showDebtForm, setShowDebtForm] = useState(false);
+  const [editingDebtId, setEditingDebtId] = useState(null);
+  const [debtError, setDebtError] = useState("");
+
   const [backupMessage, setBackupMessage] = useState(null);
   const [showCsvImport, setShowCsvImport] = useState(false);
+  const [showQuickAdd, setShowQuickAdd] = useState(false);
+  const [quickForm, setQuickForm] = useState({ amount: "", description: "", category: "", type: "despesa" });
+  const [quickError, setQuickError] = useState("");
 
   const [budgets, setBudgets] = useState([]);
   const [budgetsLoaded, setBudgetsLoaded] = useState(false);
@@ -618,6 +665,31 @@ export default function App() {
     })();
   }, [goals, goalsLoaded]);
 
+  // ---------- Load/save dívidas ----------
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await storage.get("dividas", false);
+        setDebts(res && res.value ? JSON.parse(res.value) : []);
+      } catch (e) {
+        setDebts([]);
+      } finally {
+        setDebtsLoaded(true);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!debtsLoaded) return;
+    (async () => {
+      try {
+        await storage.set("dividas", JSON.stringify(debts), false);
+      } catch (e) {
+        setLoadError(true);
+      }
+    })();
+  }, [debts, debtsLoaded]);
+
   // ---------- Toast auto-dismiss ----------
   useEffect(() => {
     if (!toast) return;
@@ -640,6 +712,8 @@ export default function App() {
   const findBank = (id) => [...DEFAULT_BANKS, ...customBanks].find((b) => b.id === id);
 
   const saldosIniciais = useMemo(() => banksList.reduce((s, b) => s + (b.initialBalance || 0), 0), [banksList]);
+
+  const categoryMemory = useMemo(() => buildCategoryMemory(transactions), [transactions]);
 
   const periodFiltered = useMemo(() => {
     if (periodMode === "todos") return transactions;
@@ -855,6 +929,58 @@ export default function App() {
     setToast({ message: `${pendentes.length} lançamento${pendentes.length !== 1 ? "s" : ""} marcado${pendentes.length !== 1 ? "s" : ""} como pago.` });
   };
 
+  const handleQuickAdd = () => {
+    const valor = parseFloat(String(quickForm.amount).replace(",", "."));
+    if (!valor || valor <= 0) { setQuickError("Informe um valor."); return; }
+    if (!quickForm.category) { setQuickError("Escolha uma categoria."); return; }
+    setTransactions((prev) => [...prev, {
+      id: uid(),
+      description: quickForm.description.trim() || findCategory(quickForm.type, quickForm.category).label,
+      amount: valor, date: todayISO(), type: quickForm.type, category: quickForm.category,
+      account: "", status: "pago", createdBy: currentUserEmail,
+    }]);
+    checkBudgetAlert(quickForm.category, quickForm.type, todayISO(), valor);
+    setQuickForm({ amount: "", description: "", category: "", type: quickForm.type });
+    setQuickError("");
+    setShowQuickAdd(false);
+    setToast({ message: "Lançamento registrado." });
+  };
+
+  const resetDebtForm = () => { setDebtForm(emptyDebtForm); setEditingDebtId(null); setDebtError(""); };
+  const openNewDebtForm = () => { resetDebtForm(); setShowDebtForm(true); };
+  const openEditDebtForm = (d) => {
+    setDebtForm({ person: d.person, amount: String(d.amount), direction: d.direction, date: d.date, dueDate: d.dueDate || "", notes: d.notes || "" });
+    setEditingDebtId(d.id);
+    setShowDebtForm(true);
+  };
+
+  const handleSubmitDebt = () => {
+    const valor = parseFloat(String(debtForm.amount).replace(",", "."));
+    if (!debtForm.person.trim()) { setDebtError("Informe a pessoa ou instituição."); return; }
+    if (!valor || valor <= 0) { setDebtError("Informe um valor maior que zero."); return; }
+    if (editingDebtId) {
+      setDebts((prev) => prev.map((d) => (d.id === editingDebtId ? { ...d, ...debtForm, person: debtForm.person.trim(), amount: valor } : d)));
+    } else {
+      setDebts((prev) => [...prev, { id: uid(), ...debtForm, person: debtForm.person.trim(), amount: valor, paid: 0, settled: false, createdBy: currentUserEmail }]);
+    }
+    setShowDebtForm(false);
+    resetDebtForm();
+  };
+
+  const handleDeleteDebt = (d) => setDebts((prev) => prev.filter((x) => x.id !== d.id));
+
+  const handleDebtPayment = (debtId, valor) => {
+    setDebts((prev) => prev.map((d) => {
+      if (d.id !== debtId) return d;
+      const novoPago = Math.max(0, Math.min(d.amount, (d.paid || 0) + valor));
+      return { ...d, paid: novoPago, settled: novoPago >= d.amount };
+    }));
+  };
+
+  const handleToggleSettled = (d) => {
+    setDebts((prev) => prev.map((x) => (x.id === d.id ? { ...x, settled: !x.settled, paid: !x.settled ? x.amount : x.paid } : x)));
+  };
+
   const handleTogglePaid = (t) => {
     setTransactions((prev) => prev.map((x) => (x.id === t.id ? { ...x, status: x.status === "pago" ? "pendente" : "pago" } : x)));
   };
@@ -1067,6 +1193,7 @@ export default function App() {
         orcamentos: budgets,
         metas: goals,
         poupanca: savingsAccounts,
+        dividas: debts,
         tema_cores: theme,
       },
     };
@@ -1097,6 +1224,7 @@ export default function App() {
         if (d.orcamentos) setBudgets(d.orcamentos);
         if (d.metas) setGoals(d.metas);
         if (d.poupanca) setSavingsAccounts(d.poupanca);
+        if (d.dividas) setDebts(d.dividas);
         if (d.tema_cores) setTheme(d.tema_cores);
         setBackupMessage({ type: "success", text: "Backup importado com sucesso!" });
       } catch (err) {
@@ -1106,10 +1234,10 @@ export default function App() {
     reader.readAsText(file);
   };
 
-  const handleConfirmCsvImport = (rows, despesaCategory, receitaCategory, account, status) => {
+  const handleConfirmCsvImport = (rows, account, status) => {
     const newTxs = rows.map((r) => ({
       id: uid(), description: r.description, amount: r.amount, date: r.date, type: r.type,
-      category: r.type === "despesa" ? despesaCategory : receitaCategory,
+      category: r.category,
       account, status: status || "pago", createdBy: currentUserEmail,
     }));
     setTransactions((prev) => [...prev, ...newTxs]);
@@ -1255,6 +1383,22 @@ export default function App() {
             onLaunchFixedBill={handleLaunchFixedBill}
             savingsAccounts={savingsAccounts}
             saldosIniciais={saldosIniciais}
+          />
+        ) : activeTab === "dividas" ? (
+          <DividasTab
+            debts={debts}
+            debtForm={debtForm}
+            setDebtForm={setDebtForm}
+            showDebtForm={showDebtForm}
+            editingDebtId={editingDebtId}
+            debtError={debtError}
+            onOpenNew={openNewDebtForm}
+            onOpenEdit={openEditDebtForm}
+            onSubmit={handleSubmitDebt}
+            onDelete={handleDeleteDebt}
+            onCancelForm={() => { setShowDebtForm(false); resetDebtForm(); }}
+            onPayment={handleDebtPayment}
+            onToggleSettled={handleToggleSettled}
           />
         ) : activeTab === "carteira" ? (
           <CarteiraTab
@@ -1464,6 +1608,7 @@ export default function App() {
                 banksList={banksList}
                 onConfirm={handleConfirmCsvImport}
                 onCancel={() => setShowCsvImport(false)}
+                categoryMemory={categoryMemory}
               />
             )}
 
@@ -1765,6 +1910,84 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* ---------------- Lançamento rápido (celular) ---------------- */}
+      {!showForm && !showQuickAdd && (
+        <button
+          onClick={() => { setQuickError(""); setShowQuickAdd(true); }}
+          className="rz-focus md:hidden fixed z-40 rounded-full shadow-lg flex items-center justify-center"
+          style={{ bottom: 20, right: 20, width: 56, height: 56, background: "var(--ink)", color: "var(--paper)" }}
+          aria-label="Lançamento rápido"
+        >
+          <Plus size={26} />
+        </button>
+      )}
+
+      {showQuickAdd && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-6" style={{ background: "rgba(30,43,35,0.45)" }}>
+          <div className="rz-card w-full sm:max-w-sm p-5" style={{ borderRadius: "14px 14px 0 0" }}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="rz-display text-xl">Lançamento rápido</h2>
+              <button onClick={() => setShowQuickAdd(false)} className="rz-focus" style={{ color: "var(--ink-soft)" }} aria-label="Fechar">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="rz-toggle mb-4">
+              <button onClick={() => setQuickForm({ ...quickForm, type: "receita", category: "" })} className={quickForm.type === "receita" ? "receita-on" : "off"}>Receita</button>
+              <button onClick={() => setQuickForm({ ...quickForm, type: "despesa", category: "" })} className={quickForm.type === "despesa" ? "despesa-on" : "off"}>Despesa</button>
+            </div>
+
+            <input
+              className="rz-input rz-focus rz-mono mb-3"
+              style={{ fontSize: "1.5rem", textAlign: "center", padding: "12px" }}
+              inputMode="decimal"
+              placeholder="0,00"
+              autoFocus
+              value={quickForm.amount}
+              onChange={(e) => setQuickForm({ ...quickForm, amount: e.target.value })}
+            />
+
+            <div className="flex flex-wrap gap-2 mb-3">
+              {categoriesByType[quickForm.type].slice(0, 8).map((c) => {
+                const ativo = quickForm.category === c.id;
+                return (
+                  <button
+                    key={c.id}
+                    onClick={() => setQuickForm({ ...quickForm, category: c.id })}
+                    className="rz-focus text-xs px-3 py-2 rounded-full flex items-center gap-1.5"
+                    style={ativo
+                      ? { background: c.color, color: "#fff" }
+                      : { background: "var(--surface)", color: "var(--ink-soft)", border: "1px solid var(--line)" }}
+                  >
+                    <span className="rz-dot" style={{ background: ativo ? "#fff" : c.color }} />
+                    {c.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            <input
+              className="rz-input rz-focus mb-3 text-sm"
+              placeholder="Descrição (opcional)"
+              value={quickForm.description}
+              onChange={(e) => setQuickForm({ ...quickForm, description: e.target.value })}
+              onKeyDown={(e) => e.key === "Enter" && handleQuickAdd()}
+            />
+
+            {quickError && <div className="text-xs mb-3" style={{ color: "var(--brick)" }}>{quickError}</div>}
+
+            <p className="text-xs mb-3" style={{ color: "var(--ink-soft)" }}>
+              Salva com a data de hoje, como pago. Dá pra ajustar depois em Lançamentos.
+            </p>
+
+            <button onClick={handleQuickAdd} className="rz-btn-primary rz-focus w-full text-sm flex items-center justify-center gap-2">
+              <Check size={16} /> Registrar
+            </button>
+          </div>
+        </div>
+      )}
+
 
       {/* ---------------- Toast ---------------- */}
       {toast && (
@@ -2313,6 +2536,49 @@ function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, s
     setSelectedCats((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   };
 
+  // ---- Retrospectiva anual ----
+  const [anoRetro, setAnoRetro] = useState(new Date().getFullYear());
+
+  const anosDisponiveis = useMemo(() => {
+    const anos = new Set(transactions.map((t) => Number(t.date.slice(0, 4))));
+    return [...anos].sort((a, b) => b - a);
+  }, [transactions]);
+
+  const retrospectiva = useMemo(() => {
+    const doAno = transactions.filter((t) => t.date.startsWith(String(anoRetro)) && t.type !== "transferencia");
+    if (doAno.length === 0) return null;
+
+    const receitas = doAno.filter((t) => t.type === "receita").reduce((s, t) => s + t.amount, 0);
+    const despesas = doAno.filter((t) => t.type === "despesa").reduce((s, t) => s + t.amount, 0);
+
+    const porMes = Array.from({ length: 12 }, (_, m) => {
+      const doMes = doAno.filter((t) => Number(t.date.slice(5, 7)) === m + 1);
+      const r = doMes.filter((t) => t.type === "receita").reduce((s, t) => s + t.amount, 0);
+      const d = doMes.filter((t) => t.type === "despesa").reduce((s, t) => s + t.amount, 0);
+      return { mes: MONTHS[m].slice(0, 3), receitas: r, despesas: d, saldo: r - d, temDados: doMes.length > 0 };
+    });
+
+    const mesesComDados = porMes.filter((m) => m.temDados);
+    const noVermelho = mesesComDados.filter((m) => m.saldo < 0).length;
+    const melhorMes = [...mesesComDados].sort((a, b) => b.saldo - a.saldo)[0];
+    const piorMes = [...mesesComDados].sort((a, b) => a.saldo - b.saldo)[0];
+
+    const porCat = {};
+    doAno.filter((t) => t.type === "despesa").forEach((t) => {
+      porCat[t.category] = (porCat[t.category] || 0) + t.amount;
+    });
+    const categorias = Object.entries(porCat)
+      .map(([id, v]) => ({ ...findCategory("despesa", id), total: v }))
+      .sort((a, b) => b.total - a.total);
+
+    const maiorGasto = [...doAno].filter((t) => t.type === "despesa").sort((a, b) => b.amount - a.amount)[0];
+
+    return {
+      receitas, despesas, saldo: receitas - despesas, porMes, mesesComDados: mesesComDados.length,
+      noVermelho, melhorMes, piorMes, categorias, maiorGasto, totalLancamentos: doAno.length,
+    };
+  }, [transactions, anoRetro, findCategory]);
+
   const customRangeData = useMemo(() => {
     if (!customStart || !customEnd) return null;
     const inRange = transactions.filter((t) => t.date >= customStart && t.date <= customEnd);
@@ -2631,6 +2897,69 @@ function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, s
           )}
         </div>
       )}
+
+      {/* Retrospectiva anual */}
+      {anosDisponiveis.length > 0 && (
+        <div className="rz-card p-4 sm:p-5 mb-6">
+          <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+            <div>
+              <h2 className="text-sm font-semibold">Retrospectiva anual</h2>
+              <p className="text-xs mt-0.5" style={{ color: "var(--ink-soft)" }}>Seu ano em números.</p>
+            </div>
+            <select className="rz-input rz-focus text-sm" style={{ width: "auto" }} value={anoRetro} onChange={(e) => setAnoRetro(Number(e.target.value))}>
+              {anosDisponiveis.map((a) => <option key={a} value={a}>{a}</option>)}
+            </select>
+          </div>
+
+          {!retrospectiva ? (
+            <p className="text-sm py-8 text-center" style={{ color: "var(--ink-soft)" }}>Nenhum lançamento em {anoRetro}.</p>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
+                <SummaryCard label={`Entrou em ${anoRetro}`} value={retrospectiva.receitas} icon={TrendingUp} tone="emerald" />
+                <SummaryCard label={`Saiu em ${anoRetro}`} value={retrospectiva.despesas} icon={TrendingDown} tone="brick" />
+                <SummaryCard label="Resultado do ano" value={retrospectiva.saldo} icon={Scale} tone={retrospectiva.saldo >= 0 ? "emerald" : "brick"} />
+              </div>
+
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={retrospectiva.porMes} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
+                  <CartesianGrid stroke="var(--line)" vertical={false} />
+                  <XAxis dataKey="mes" tick={{ fontSize: 10, fontFamily: "IBM Plex Mono, monospace", fill: "var(--ink-soft)" }} axisLine={{ stroke: "var(--line)" }} tickLine={false} />
+                  <YAxis tickFormatter={formatCompact} tick={{ fontSize: 11, fontFamily: "IBM Plex Mono, monospace", fill: "var(--ink-soft)" }} axisLine={false} tickLine={false} width={48} />
+                  <Tooltip formatter={(v) => formatCurrency(v)} contentStyle={tooltipStyle} labelStyle={{ color: "var(--ink)", fontWeight: 600 }} />
+                  <Bar dataKey="saldo" name="Resultado" radius={[3, 3, 0, 0]}>
+                    {retrospectiva.porMes.map((m, i) => (
+                      <Cell key={i} fill={m.saldo >= 0 ? "var(--emerald)" : "var(--brick)"} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+
+              <div className="flex flex-col gap-2 mt-5">
+                <RetroLinha rotulo="Lançamentos registrados" valor={`${retrospectiva.totalLancamentos} em ${retrospectiva.mesesComDados} ${retrospectiva.mesesComDados === 1 ? "mês" : "meses"}`} />
+                {retrospectiva.melhorMes && (
+                  <RetroLinha rotulo="Melhor mês" valor={`${retrospectiva.melhorMes.mes} · ${formatCurrency(retrospectiva.melhorMes.saldo)}`} cor="var(--emerald)" />
+                )}
+                {retrospectiva.piorMes && retrospectiva.piorMes.mes !== retrospectiva.melhorMes?.mes && (
+                  <RetroLinha rotulo="Mês mais apertado" valor={`${retrospectiva.piorMes.mes} · ${formatCurrency(retrospectiva.piorMes.saldo)}`} cor={retrospectiva.piorMes.saldo < 0 ? "var(--brick)" : undefined} />
+                )}
+                <RetroLinha
+                  rotulo="Meses no vermelho"
+                  valor={retrospectiva.noVermelho === 0 ? "nenhum 🎉" : `${retrospectiva.noVermelho} de ${retrospectiva.mesesComDados}`}
+                  cor={retrospectiva.noVermelho === 0 ? "var(--emerald)" : "var(--brick)"}
+                />
+                {retrospectiva.categorias[0] && (
+                  <RetroLinha rotulo="Categoria que mais pesou" valor={`${retrospectiva.categorias[0].label} · ${formatCurrency(retrospectiva.categorias[0].total)}`} />
+                )}
+                {retrospectiva.maiorGasto && (
+                  <RetroLinha rotulo="Maior gasto único" valor={`${retrospectiva.maiorGasto.description} · ${formatCurrency(retrospectiva.maiorGasto.amount)}`} />
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
 
       {/* Custom period report */}
       <div className="rz-card p-4 sm:p-5">
@@ -3214,7 +3543,16 @@ function FixedBillsTab({
   );
 }
 
-function CsvImportModal({ categoriesByType, banksList, onConfirm, onCancel }) {
+function RetroLinha({ rotulo, valor, cor }) {
+  return (
+    <div className="flex items-center justify-between gap-3 py-2 flex-wrap" style={{ borderTop: "1px solid var(--line)" }}>
+      <span className="text-sm" style={{ color: "var(--ink-soft)" }}>{rotulo}</span>
+      <span className="text-sm font-medium text-right" style={cor ? { color: cor } : undefined}>{valor}</span>
+    </div>
+  );
+}
+
+function CsvImportModal({ categoriesByType, banksList, onConfirm, onCancel, categoryMemory }) {
   const [rows, setRows] = useState([]);
   const [error, setError] = useState("");
   const [fileName, setFileName] = useState("");
@@ -3232,26 +3570,47 @@ function CsvImportModal({ categoriesByType, banksList, onConfirm, onCancel }) {
         const { rows: parsedRows, error: parseErr } = parseImportedCsv(results.data);
         if (parseErr) { setError(parseErr); setRows([]); return; }
         setError("");
-        setRows(parsedRows);
+        // Aplica o aprendizado: sugere categoria com base no que já foi usado antes
+        setRows(parsedRows.map((r) => {
+          const lembrete = categoryMemory[normalizeDesc(r.description)];
+          const sugerida = lembrete && lembrete.tipo === r.type ? lembrete.catId : "";
+          return { ...r, category: sugerida, sugerida: !!sugerida };
+        }));
       },
       error: () => setError("Não foi possível ler o arquivo."),
     });
   };
 
+  const setRowCategory = (idx, catId) => {
+    setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, category: catId, sugerida: false } : r)));
+  };
+
+  const aplicarPadraoNosVazios = () => {
+    setRows((prev) => prev.map((r) => {
+      if (r.category) return r;
+      const padrao = r.type === "despesa" ? despesaCategory : receitaCategory;
+      return padrao ? { ...r, category: padrao } : r;
+    }));
+  };
+
   const validRows = rows.filter((r) => r.valid);
   const invalidCount = rows.length - validRows.length;
+  const semCategoria = validRows.filter((r) => !r.category).length;
+  const reconhecidos = validRows.filter((r) => r.sugerida).length;
   const hasDespesas = validRows.some((r) => r.type === "despesa");
   const hasReceitas = validRows.some((r) => r.type === "receita");
 
   const handleConfirm = () => {
-    if (hasDespesas && !despesaCategory) { setError("Selecione uma categoria para as despesas importadas."); return; }
-    if (hasReceitas && !receitaCategory) { setError("Selecione uma categoria para as receitas importadas."); return; }
-    onConfirm(validRows, despesaCategory, receitaCategory, account, status);
+    if (semCategoria > 0) {
+      setError(`${semCategoria} lançamento${semCategoria !== 1 ? "s" : ""} sem categoria. Defina uma categoria padrão e clique em "Aplicar aos vazios", ou escolha uma a uma.`);
+      return;
+    }
+    onConfirm(validRows, account, status);
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-6" style={{ background: "rgba(30,43,35,0.45)" }}>
-      <div className="rz-card w-full sm:max-w-lg p-5 sm:p-6" style={{ borderRadius: "14px 14px 0 0", maxHeight: "90vh", overflowY: "auto" }}>
+      <div className="rz-card w-full sm:max-w-2xl p-5 sm:p-6" style={{ borderRadius: "14px 14px 0 0", maxHeight: "90vh", overflowY: "auto" }}>
         <div className="flex items-center justify-between mb-4">
           <h2 className="rz-display text-xl">Importar extrato (CSV)</h2>
           <button onClick={onCancel} className="rz-focus" style={{ color: "var(--ink-soft)" }} aria-label="Fechar"><X size={20} /></button>
@@ -3267,64 +3626,84 @@ function CsvImportModal({ categoriesByType, banksList, onConfirm, onCancel }) {
           </>
         ) : (
           <>
-            <p className="text-xs mb-3" style={{ color: "var(--ink-soft)" }}>
-              {fileName} — {validRows.length} lançamento{validRows.length !== 1 ? "s" : ""} prontos para importar
+            <p className="text-xs mb-1" style={{ color: "var(--ink-soft)" }}>
+              {fileName} — {validRows.length} lançamento{validRows.length !== 1 ? "s" : ""} prontos
               {invalidCount > 0 ? `, ${invalidCount} ignorado${invalidCount !== 1 ? "s" : ""} (dados incompletos)` : ""}.
             </p>
+            {reconhecidos > 0 && (
+              <p className="text-xs mb-3" style={{ color: "var(--emerald)" }}>
+                {reconhecidos} categorizado{reconhecidos !== 1 ? "s" : ""} automaticamente com base no seu histórico.
+              </p>
+            )}
 
-            <div className="flex flex-col gap-3 mb-4">
+            <div className="flex flex-col sm:flex-row gap-3 mb-2">
               {hasDespesas && (
-                <div>
-                  <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Categoria para despesas</label>
-                  <select className="rz-input rz-focus" value={despesaCategory} onChange={(e) => setDespesaCategory(e.target.value)}>
-                    <option value="" disabled>Selecione</option>
+                <div className="flex-1">
+                  <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Categoria padrão (despesas)</label>
+                  <select className="rz-input rz-focus text-sm" value={despesaCategory} onChange={(e) => setDespesaCategory(e.target.value)}>
+                    <option value="">Selecione</option>
                     {categoriesByType.despesa.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
                   </select>
                 </div>
               )}
               {hasReceitas && (
-                <div>
-                  <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Categoria para receitas</label>
-                  <select className="rz-input rz-focus" value={receitaCategory} onChange={(e) => setReceitaCategory(e.target.value)}>
-                    <option value="" disabled>Selecione</option>
+                <div className="flex-1">
+                  <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Categoria padrão (receitas)</label>
+                  <select className="rz-input rz-focus text-sm" value={receitaCategory} onChange={(e) => setReceitaCategory(e.target.value)}>
+                    <option value="">Selecione</option>
                     {categoriesByType.receita.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
                   </select>
                 </div>
               )}
-              <div>
-                <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Banco / Conta (opcional, aplicado a todos)</label>
-                <select className="rz-input rz-focus" value={account} onChange={(e) => setAccount(e.target.value)}>
+            </div>
+            <button onClick={aplicarPadraoNosVazios} className="rz-btn-ghost rz-focus text-xs !py-1.5 !px-3 mb-4">
+              Aplicar aos {semCategoria} sem categoria
+            </button>
+
+            <div className="flex flex-col sm:flex-row gap-3 mb-4">
+              <div className="flex-1">
+                <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Banco / Conta (todos)</label>
+                <select className="rz-input rz-focus text-sm" value={account} onChange={(e) => setAccount(e.target.value)}>
                   <option value="">Nenhum selecionado</option>
                   {banksList.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
                 </select>
               </div>
-              <div>
+              <div className="flex-1">
                 <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Status</label>
-                <select className="rz-input rz-focus" value={status} onChange={(e) => setStatus(e.target.value)}>
+                <select className="rz-input rz-focus text-sm" value={status} onChange={(e) => setStatus(e.target.value)}>
                   <option value="pago">Já pago (extrato do banco)</option>
                   <option value="pendente">Pendente (ainda vai acontecer)</option>
                 </select>
-                <p className="text-xs mt-1" style={{ color: "var(--ink-soft)" }}>
-                  Só lançamentos pagos entram no saldo das contas.
-                </p>
               </div>
             </div>
 
-            <div className="rz-card overflow-hidden mb-4" style={{ maxHeight: 220, overflowY: "auto" }}>
-              {validRows.slice(0, 50).map((r, i) => (
-                <div key={i} className="flex items-center gap-3 px-3 py-2 text-xs" style={{ borderTop: i === 0 ? "none" : "1px solid var(--line)" }}>
-                  <span className="rz-mono w-20 shrink-0" style={{ color: "var(--ink-soft)" }}>{formatDateBR(r.date)}</span>
-                  <span className="flex-1 truncate">{r.description}</span>
-                  <span className="rz-mono font-semibold shrink-0" style={{ color: r.type === "receita" ? "var(--emerald)" : "var(--brick)" }}>
-                    {r.type === "receita" ? "+ " : "− "}{formatCurrency(r.amount)}
-                  </span>
-                </div>
-              ))}
-              {validRows.length > 50 && (
-                <div className="px-3 py-2 text-xs text-center" style={{ color: "var(--ink-soft)", borderTop: "1px solid var(--line)" }}>
-                  + {validRows.length - 50} lançamentos não exibidos na prévia
-                </div>
-              )}
+            <p className="text-xs mb-2" style={{ color: "var(--ink-soft)" }}>
+              Confira e ajuste a categoria de cada linha, se precisar:
+            </p>
+            <div className="rz-card overflow-hidden mb-4" style={{ maxHeight: 280, overflowY: "auto" }}>
+              {validRows.map((r, i) => {
+                const idxReal = rows.indexOf(r);
+                return (
+                  <div key={i} className="flex flex-col sm:flex-row sm:items-center gap-2 px-3 py-2" style={{ borderTop: i === 0 ? "none" : "1px solid var(--line)" }}>
+                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                      <span className="rz-mono text-[11px] shrink-0" style={{ color: "var(--ink-soft)" }}>{formatDateBR(r.date)}</span>
+                      <span className="text-xs flex-1 truncate">{r.description}</span>
+                      <span className="rz-mono text-xs font-semibold whitespace-nowrap shrink-0" style={{ color: r.type === "receita" ? "var(--emerald)" : "var(--brick)" }}>
+                        {r.type === "receita" ? "+ " : "− "}{formatCurrency(r.amount)}
+                      </span>
+                    </div>
+                    <select
+                      className="rz-input rz-focus text-xs sm:w-44 shrink-0"
+                      style={!r.category ? { borderColor: "var(--gold)" } : r.sugerida ? { borderColor: "var(--emerald)" } : undefined}
+                      value={r.category}
+                      onChange={(e) => setRowCategory(idxReal, e.target.value)}
+                    >
+                      <option value="">Sem categoria</option>
+                      {categoriesByType[r.type].map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+                    </select>
+                  </div>
+                );
+              })}
             </div>
 
             {error && <div className="text-xs mb-3" style={{ color: "var(--brick)" }}>{error}</div>}
@@ -3337,6 +3716,212 @@ function CsvImportModal({ categoriesByType, banksList, onConfirm, onCancel }) {
             </div>
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+
+function DividasTab({ debts, debtForm, setDebtForm, showDebtForm, editingDebtId, debtError, onOpenNew, onOpenEdit, onSubmit, onDelete, onCancelForm, onPayment, onToggleSettled }) {
+  const abertas = debts.filter((d) => !d.settled);
+  const quitadas = debts.filter((d) => d.settled);
+
+  const aReceber = abertas.filter((d) => d.direction === "emprestei").reduce((s, d) => s + (d.amount - (d.paid || 0)), 0);
+  const aPagar = abertas.filter((d) => d.direction === "devo").reduce((s, d) => s + (d.amount - (d.paid || 0)), 0);
+
+  return (
+    <div>
+      <header className="mb-6 flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="rz-display text-2xl md:text-3xl">Dívidas</h1>
+          <p className="text-sm mt-1" style={{ color: "var(--ink-soft)" }}>Dinheiro que você emprestou ou pegou emprestado.</p>
+        </div>
+        <button onClick={onOpenNew} className="rz-btn-primary rz-focus flex items-center gap-2 text-sm whitespace-nowrap">
+          <Plus size={16} /> Nova dívida
+        </button>
+      </header>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
+        <SummaryCard label="Tenho a receber" value={aReceber} icon={TrendingUp} tone="emerald" />
+        <SummaryCard label="Tenho a pagar" value={aPagar} icon={TrendingDown} tone="brick" />
+      </div>
+
+      {debts.length === 0 ? (
+        <div className="rz-card p-10 text-center">
+          <HandCoins size={26} className="mx-auto mb-3" style={{ color: "var(--line)" }} />
+          <div className="rz-display text-lg mb-1">Nenhuma dívida registrada</div>
+          <p className="text-sm mb-4" style={{ color: "var(--ink-soft)" }}>Registre o que você emprestou ou o que deve, para não perder de vista.</p>
+          <button onClick={onOpenNew} className="rz-btn-primary rz-focus text-sm inline-flex items-center gap-2">
+            <Plus size={16} /> Registrar dívida
+          </button>
+        </div>
+      ) : (
+        <>
+          {abertas.length > 0 && (
+            <div className="grid sm:grid-cols-2 gap-4 mb-6">
+              {abertas.map((d) => <DebtCard key={d.id} debt={d} onEdit={onOpenEdit} onDelete={onDelete} onPayment={onPayment} onToggleSettled={onToggleSettled} />)}
+            </div>
+          )}
+
+          {quitadas.length > 0 && (
+            <>
+              <h3 className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: "var(--ink-soft)" }}>Quitadas</h3>
+              <div className="rz-card overflow-hidden opacity-70">
+                {quitadas.map((d, i) => (
+                  <div key={d.id} className="flex items-center gap-3 px-4 py-3" style={{ borderTop: i === 0 ? "none" : "1px solid var(--line)" }}>
+                    <span className="rz-dot" style={{ background: d.direction === "emprestei" ? "var(--emerald)" : "var(--brick)" }} />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm truncate">{d.person}</div>
+                      <div className="text-xs" style={{ color: "var(--ink-soft)" }}>
+                        {d.direction === "emprestei" ? "Emprestei" : "Devia"} · {formatDateBR(d.date)}
+                      </div>
+                    </div>
+                    <span className="rz-mono text-sm whitespace-nowrap" style={{ color: "var(--ink-soft)" }}>{formatCurrency(d.amount)}</span>
+                    <button onClick={() => onToggleSettled(d)} className="rz-focus p-1.5 rounded-md" aria-label="Reabrir" style={{ color: "var(--ink-soft)" }}>
+                      <RotateCcw size={14} />
+                    </button>
+                    <button onClick={() => onDelete(d)} className="rz-focus p-1.5 rounded-md" aria-label="Excluir" style={{ color: "var(--ink-soft)" }}>
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </>
+      )}
+
+      {showDebtForm && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-6" style={{ background: "rgba(30,43,35,0.45)" }}>
+          <div className="rz-card w-full sm:max-w-md p-5 sm:p-6" style={{ borderRadius: "14px 14px 0 0", maxHeight: "90vh", overflowY: "auto" }}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="rz-display text-xl">{editingDebtId ? "Editar dívida" : "Nova dívida"}</h2>
+              <button onClick={onCancelForm} className="rz-focus" style={{ color: "var(--ink-soft)" }} aria-label="Fechar"><X size={20} /></button>
+            </div>
+
+            <div className="rz-toggle mb-4">
+              <button onClick={() => setDebtForm({ ...debtForm, direction: "emprestei" })} className={debtForm.direction === "emprestei" ? "receita-on" : "off"}>Emprestei</button>
+              <button onClick={() => setDebtForm({ ...debtForm, direction: "devo" })} className={debtForm.direction === "devo" ? "despesa-on" : "off"}>Devo</button>
+            </div>
+
+            <div className="flex flex-col gap-3">
+              <div>
+                <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>
+                  {debtForm.direction === "emprestei" ? "Para quem emprestei" : "Para quem devo"}
+                </label>
+                <input className="rz-input rz-focus" placeholder="Nome da pessoa ou instituição" value={debtForm.person} onChange={(e) => setDebtForm({ ...debtForm, person: e.target.value })} />
+              </div>
+
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Valor (R$)</label>
+                  <input className="rz-input rz-focus rz-mono" inputMode="decimal" placeholder="0,00" value={debtForm.amount} onChange={(e) => setDebtForm({ ...debtForm, amount: e.target.value })} />
+                </div>
+                <div className="flex-1">
+                  <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Data</label>
+                  <input type="date" className="rz-input rz-focus rz-mono" value={debtForm.date} onChange={(e) => setDebtForm({ ...debtForm, date: e.target.value })} />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Previsão de acerto (opcional)</label>
+                <input type="date" className="rz-input rz-focus rz-mono" value={debtForm.dueDate} onChange={(e) => setDebtForm({ ...debtForm, dueDate: e.target.value })} />
+              </div>
+
+              <div>
+                <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Observações (opcional)</label>
+                <input className="rz-input rz-focus" placeholder="Ex: combinamos parcelar em 3x" value={debtForm.notes} onChange={(e) => setDebtForm({ ...debtForm, notes: e.target.value })} />
+              </div>
+
+              <p className="text-xs" style={{ color: "var(--ink-soft)" }}>
+                Dívidas não entram como receita nem despesa — elas só registram o que ainda vai ser acertado.
+              </p>
+
+              {debtError && <div className="text-xs" style={{ color: "var(--brick)" }}>{debtError}</div>}
+
+              <div className="flex gap-2 mt-1">
+                <button onClick={onCancelForm} className="rz-btn-ghost rz-focus flex-1 text-sm">Cancelar</button>
+                <button onClick={onSubmit} className="rz-btn-primary rz-focus flex-1 text-sm flex items-center justify-center gap-2">
+                  <Check size={16} /> {editingDebtId ? "Salvar" : "Registrar"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DebtCard({ debt, onEdit, onDelete, onPayment, onToggleSettled }) {
+  const [valor, setValor] = useState("");
+  const emprestei = debt.direction === "emprestei";
+  const pago = debt.paid || 0;
+  const restante = debt.amount - pago;
+  const pct = debt.amount > 0 ? (pago / debt.amount) * 100 : 0;
+  const cor = emprestei ? "var(--emerald)" : "var(--brick)";
+
+  const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+  const atrasada = debt.dueDate && new Date(debt.dueDate + "T00:00:00") < hoje;
+
+  const registrar = () => {
+    const v = parseFloat(String(valor).replace(",", "."));
+    if (!v || v <= 0) return;
+    onPayment(debt.id, v);
+    setValor("");
+  };
+
+  return (
+    <div className="rz-card p-4 sm:p-5">
+      <div className="flex items-start justify-between gap-2 mb-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="rz-dot" style={{ background: cor }} />
+          <div className="min-w-0">
+            <div className="text-sm font-medium truncate">{debt.person}</div>
+            <div className="text-xs" style={{ color: "var(--ink-soft)" }}>
+              {emprestei ? "Tenho a receber" : "Tenho a pagar"} · {formatDateBR(debt.date)}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          <button onClick={() => onEdit(debt)} className="rz-focus p-1 rounded-md" aria-label="Editar" style={{ color: "var(--ink-soft)" }}><Pencil size={13} /></button>
+          <button onClick={() => onDelete(debt)} className="rz-focus p-1 rounded-md" aria-label="Excluir" style={{ color: "var(--ink-soft)" }}><Trash2 size={13} /></button>
+        </div>
+      </div>
+
+      <div className="flex items-baseline justify-between mb-2">
+        <span className="rz-mono text-lg font-semibold" style={{ color: cor }}>{formatCurrency(restante)}</span>
+        {pago > 0 && <span className="rz-mono text-xs" style={{ color: "var(--ink-soft)" }}>de {formatCurrency(debt.amount)}</span>}
+      </div>
+
+      {pago > 0 && (
+        <>
+          <div className="rz-progress-track mb-1">
+            <div className="rz-progress-fill" style={{ width: `${Math.min(pct, 100)}%`, background: cor }} />
+          </div>
+          <div className="rz-mono text-[11px] mb-2" style={{ color: "var(--ink-soft)" }}>{formatCurrency(pago)} já acertado</div>
+        </>
+      )}
+
+      {debt.dueDate && (
+        <div className="text-xs mb-2" style={{ color: atrasada ? "var(--brick)" : "var(--ink-soft)" }}>
+          {atrasada ? "Venceu em " : "Previsto para "}{formatDateBR(debt.dueDate)}
+        </div>
+      )}
+
+      {debt.notes && <div className="text-xs mb-3" style={{ color: "var(--ink-soft)" }}>{debt.notes}</div>}
+
+      <div className="flex items-center gap-2">
+        <input
+          className="rz-input rz-focus rz-mono text-sm flex-1"
+          inputMode="decimal"
+          placeholder={emprestei ? "Recebi..." : "Paguei..."}
+          value={valor}
+          onChange={(e) => setValor(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && registrar()}
+        />
+        <button onClick={registrar} className="rz-focus p-1.5 rounded-md" style={{ color: cor }} aria-label="Registrar acerto"><Plus size={16} /></button>
+        <button onClick={() => onToggleSettled(debt)} className="rz-btn-ghost rz-focus text-xs !py-1.5 !px-3 whitespace-nowrap">Quitar</button>
       </div>
     </div>
   );
