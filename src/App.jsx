@@ -1680,6 +1680,7 @@ export default function App() {
             savingsAccounts={savingsAccounts}
             saldosIniciais={saldosIniciais}
             cardIds={cardIds}
+            irParaHoje={irParaHoje}
           />
         ) : activeTab === "dividas" ? (
           <DividasTab
@@ -5210,7 +5211,7 @@ function CaixinhaCard({ box, primeira, ultima, onDelete, onContribute, onDeleteH
 }
 
 
-function VisaoGeralTab({ transactions, periodFiltered, totals, refDate, periodMode, shiftMonth, setPeriodMode, findCategory, setActiveTab, fixedBills, findBank, onLaunchFixedBill, savingsAccounts, saldosIniciais, cardIds }) {
+function VisaoGeralTab({ transactions, periodFiltered, totals, refDate, periodMode, shiftMonth, setPeriodMode, findCategory, setActiveTab, fixedBills, findBank, onLaunchFixedBill, savingsAccounts, saldosIniciais, cardIds, irParaHoje }) {
   const saldoTotal = useMemo(
     () => saldosIniciais + transactions.filter((t) => t.status === "pago")
       .reduce((s, t) => s + efeitoNoSaldoGeral(t, cardIds), 0),
