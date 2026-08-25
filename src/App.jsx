@@ -439,7 +439,7 @@ export default function App() {
 
   const [budgets, setBudgets] = useState([]);
   const [budgetsLoaded, setBudgetsLoaded] = useState(false);
-  const [budgetForm, setBudgetForm] = useState({ categoryId: "", limit: "" });
+  const [budgetForm, setBudgetForm] = useState({ kind: "categoria", categoryId: "", accountId: "", limit: "" });
   const [budgetError, setBudgetError] = useState("");
 
 
@@ -898,18 +898,34 @@ export default function App() {
     }
   };
 
-  const checkBudgetAlert = (categoryId, type, date, addedAmount) => {
+  const checkBudgetAlert = (categoryId, type, date, addedAmount, accountId) => {
     if (type !== "despesa") return;
-    const budget = budgets.find((b) => b.categoryId === categoryId);
-    if (!budget) return;
     const d = new Date(date + "T00:00:00");
-    const monthTotal = transactions
-      .filter((t) => t.type === "despesa" && t.category === categoryId)
-      .filter((t) => { const td = new Date(t.date + "T00:00:00"); return td.getFullYear() === d.getFullYear() && td.getMonth() === d.getMonth(); })
-      .reduce((s, t) => s + Number(t.amount), 0) + addedAmount;
-    if (monthTotal > budget.limit) {
-      const cat = findCategory("despesa", categoryId);
-      setToast({ message: `Orçamento de "${cat.label}" estourado: ${formatCurrency(monthTotal)} de ${formatCurrency(budget.limit)}.`, tone: "warning" });
+    const noMesmoMes = (t) => {
+      const td = new Date(t.date + "T00:00:00");
+      return td.getFullYear() === d.getFullYear() && td.getMonth() === d.getMonth();
+    };
+
+    const avisar = (nome, total, limite) => {
+      if (total > limite) {
+        setToast({ message: `Orçamento de "${nome}" estourado: ${formatCurrency(total)} de ${formatCurrency(limite)}.`, tone: "warning" });
+      }
+    };
+
+    const bCat = budgets.find((b) => b.kind !== "conta" && b.categoryId === categoryId);
+    if (bCat) {
+      const total = transactions
+        .filter((t) => t.type === "despesa" && t.category === categoryId).filter(noMesmoMes)
+        .reduce((s, t) => s + Number(t.amount), 0) + addedAmount;
+      avisar(findCategory("despesa", categoryId).label, total, bCat.limit);
+    }
+
+    const bConta = accountId && budgets.find((b) => b.kind === "conta" && b.accountId === accountId);
+    if (bConta) {
+      const total = transactions
+        .filter((t) => t.type === "despesa" && t.account === accountId).filter(noMesmoMes)
+        .reduce((s, t) => s + Number(t.amount), 0) + addedAmount;
+      avisar(findBank(accountId)?.label || "conta", total, bConta.limit);
     }
   };
 
@@ -958,7 +974,7 @@ export default function App() {
         });
       }
       setTransactions((prev) => [...prev, ...newTxs]);
-      checkBudgetAlert(form.category, form.type, newTxs[0].date, newTxs[0].amount);
+      checkBudgetAlert(form.category, form.type, newTxs[0].date, newTxs[0].amount, form.account);
       setShowForm(false);
       resetForm();
       return;
@@ -968,7 +984,7 @@ export default function App() {
       setTransactions((prev) => prev.map((t) => (t.id === editingId ? { ...t, ...form, amount: amountNum } : t)));
     } else {
       setTransactions((prev) => [...prev, { id: pendingId || uid(), ...form, amount: amountNum, createdBy: currentUserEmail }]);
-      checkBudgetAlert(form.category, form.type, form.date, amountNum);
+      checkBudgetAlert(form.category, form.type, form.date, amountNum, form.account);
     }
     setShowForm(false);
     resetForm();
@@ -1043,7 +1059,7 @@ export default function App() {
       amount: valor, date: todayISO(), type: quickForm.type, category: quickForm.category,
       account: "", status: "pago", createdBy: currentUserEmail,
     }]);
-    checkBudgetAlert(quickForm.category, quickForm.type, todayISO(), valor);
+    checkBudgetAlert(quickForm.category, quickForm.type, todayISO(), valor, "");
     setQuickForm({ amount: "", description: "", category: "", type: quickForm.type });
     setQuickError("");
     setShowQuickAdd(false);
@@ -1476,12 +1492,17 @@ export default function App() {
   };
 
   const handleAddBudget = () => {
-    if (!budgetForm.categoryId) { setBudgetError("Selecione uma categoria."); return; }
+    const ehConta = budgetForm.kind === "conta";
+    const alvo = ehConta ? budgetForm.accountId : budgetForm.categoryId;
+    if (!alvo) { setBudgetError(ehConta ? "Selecione uma conta ou cartão." : "Selecione uma categoria."); return; }
     const limitNum = parseFloat(String(budgetForm.limit).replace(",", "."));
     if (!limitNum || limitNum <= 0) { setBudgetError("Informe um limite maior que zero."); return; }
-    if (budgets.some((b) => b.categoryId === budgetForm.categoryId)) { setBudgetError("Essa categoria já tem um orçamento definido."); return; }
-    setBudgets((prev) => [...prev, { id: uid(), categoryId: budgetForm.categoryId, limit: limitNum }]);
-    setBudgetForm({ categoryId: "", limit: "" });
+    const jaExiste = budgets.some((b) => (ehConta ? b.kind === "conta" && b.accountId === alvo : b.kind !== "conta" && b.categoryId === alvo));
+    if (jaExiste) { setBudgetError(ehConta ? "Essa conta já tem um orçamento definido." : "Essa categoria já tem um orçamento definido."); return; }
+    setBudgets((prev) => [...prev, ehConta
+      ? { id: uid(), kind: "conta", accountId: alvo, limit: limitNum }
+      : { id: uid(), kind: "categoria", categoryId: alvo, limit: limitNum }]);
+    setBudgetForm({ kind: budgetForm.kind, categoryId: "", accountId: "", limit: "" });
     setBudgetError("");
   };
 
@@ -1678,6 +1699,8 @@ export default function App() {
             onDelete={handleDeleteBudget}
             onToggleRollover={handleToggleRollover}
             transactions={transactions}
+            banksList={banksList}
+            findBank={findBank}
           />
         ) : activeTab === "fixas" ? (
           <FixedBillsTab
@@ -2644,10 +2667,12 @@ function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, s
       const receitas = inMonth.filter((t) => t.type === "receita").reduce((s, t) => s + Number(t.amount), 0);
       const despesas = inMonth.filter((t) => t.type === "despesa").reduce((s, t) => s + Number(t.amount), 0);
       const porCategoria = {};
+      const porConta = {};
       inMonth.filter((t) => t.type === "despesa").forEach((t) => {
         porCategoria[t.category] = (porCategoria[t.category] || 0) + Number(t.amount);
+        if (t.account) porConta[t.account] = (porConta[t.account] || 0) + Number(t.amount);
       });
-      return { mes: `${MONTHS[m].slice(0, 3)}/${String(y).slice(2)}`, receitas, despesas, saldo: receitas - despesas, porCategoria };
+      return { mes: `${MONTHS[m].slice(0, 3)}/${String(y).slice(2)}`, receitas, despesas, saldo: receitas - despesas, porCategoria, porConta };
     });
   }, [transactions, monthsCount]);
 
@@ -2707,17 +2732,19 @@ function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, s
   // ---- Histórico de orçamento ----
   const historicoOrcamento = useMemo(() => {
     return budgets.map((b) => {
-      const cat = findCategory("despesa", b.categoryId);
-      const meses = monthlyData.map((m) => ({
-        mes: m.mes,
-        gasto: m.porCategoria[b.categoryId] || 0,
-        estourou: (m.porCategoria[b.categoryId] || 0) > b.limit,
-      }));
+      const ehConta = b.kind === "conta";
+      const alvo = ehConta
+        ? (findBank(b.accountId) || { label: "conta", color: "#9A8A7A" })
+        : findCategory("despesa", b.categoryId);
+      const meses = monthlyData.map((m) => {
+        const gasto = ehConta ? (m.porConta[b.accountId] || 0) : (m.porCategoria[b.categoryId] || 0);
+        return { mes: m.mes, gasto, estourou: gasto > b.limit };
+      });
       const estouros = meses.filter((m) => m.estourou).length;
       const mediaGasto = meses.reduce((s, m) => s + m.gasto, 0) / (meses.length || 1);
-      return { ...b, name: cat.label, color: cat.color, meses, estouros, mediaGasto };
+      return { ...b, name: alvo.label, color: alvo.color, ehConta, meses, estouros, mediaGasto };
     });
-  }, [budgets, monthlyData, findCategory]);
+  }, [budgets, monthlyData, findCategory, findBank]);
 
   useEffect(() => {
     if (selectedCats.length === 0 && mediaPorCategoria.length > 0) {
@@ -3010,6 +3037,9 @@ function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, s
                   <div className="flex items-center gap-2 min-w-0">
                     <span className="rz-dot" style={{ background: b.color }} />
                     <span className="text-sm truncate">{b.name}</span>
+                    {b.ehConta && (
+                      <span className="rz-mono text-[9px] px-1.5 py-0.5 rounded shrink-0" style={{ background: "var(--paper-alt)", color: "var(--ink-soft)" }}>CONTA</span>
+                    )}
                   </div>
                   <span className="rz-mono text-xs whitespace-nowrap" style={{ color: b.estouros > 0 ? "var(--brick)" : "var(--emerald)" }}>
                     {b.estouros === 0 ? "sempre dentro do limite" : `estourou ${b.estouros}x de ${b.meses.length}`}
@@ -3281,31 +3311,41 @@ function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, s
   );
 }
 
-function OrcamentoTab({ budgets, periodFiltered, refDate, shiftMonth, categoriesByType, findCategory, budgetForm, setBudgetForm, budgetError, onAdd, onUpdateLimit, onDelete, onToggleRollover, transactions }) {
-  const spentByCategory = useMemo(() => {
+function OrcamentoTab({ budgets, periodFiltered, refDate, shiftMonth, categoriesByType, findCategory, budgetForm, setBudgetForm, budgetError, onAdd, onUpdateLimit, onDelete, onToggleRollover, transactions, banksList, findBank }) {
+  const ehConta = (b) => b.kind === "conta";
+  const rotuloDe = (b) => (ehConta(b) ? (findBank(b.accountId) || { label: "conta" }) : findCategory("despesa", b.categoryId));
+  const gastoDe = (b, lista) => lista
+    .filter((t) => t.type === "despesa" && (ehConta(b) ? t.account === b.accountId : t.category === b.categoryId))
+    .reduce((s, t) => s + Number(t.amount), 0);
+
+  const gastoPorOrcamento = useMemo(() => {
     const map = {};
-    periodFiltered.filter((t) => t.type === "despesa").forEach((t) => { map[t.category] = (map[t.category] || 0) + Number(t.amount); });
+    budgets.forEach((b) => { map[b.id] = gastoDe(b, periodFiltered); });
     return map;
-  }, [periodFiltered]);
+  }, [budgets, periodFiltered]);
 
   // Média histórica de gasto por categoria (últimos 6 meses antes do atual)
   const mediaHistorica = useMemo(() => {
     const map = {};
-    const meses = [];
-    for (let i = 1; i <= 6; i++) meses.push(new Date(refDate.getFullYear(), refDate.getMonth() - i, 1));
-    meses.forEach((d) => {
+    const registrar = (chave, valor, mesKey) => {
+      if (!map[chave]) map[chave] = { total: 0, meses: new Set() };
+      map[chave].total += valor;
+      map[chave].meses.add(mesKey);
+    };
+    for (let i = 1; i <= 6; i++) {
+      const d = new Date(refDate.getFullYear(), refDate.getMonth() - i, 1);
+      const mesKey = `${d.getFullYear()}-${d.getMonth()}`;
       transactions.filter((t) => {
         if (t.type !== "despesa") return false;
         const td = new Date(t.date + "T00:00:00");
         return td.getFullYear() === d.getFullYear() && td.getMonth() === d.getMonth();
       }).forEach((t) => {
-        if (!map[t.category]) map[t.category] = { total: 0, meses: new Set() };
-        map[t.category].total += Number(t.amount);
-        map[t.category].meses.add(`${d.getFullYear()}-${d.getMonth()}`);
+        registrar(`cat:${t.category}`, Number(t.amount), mesKey);
+        if (t.account) registrar(`conta:${t.account}`, Number(t.amount), mesKey);
       });
-    });
+    }
     const out = {};
-    Object.entries(map).forEach(([cat, v]) => { out[cat] = v.total / Math.max(1, v.meses.size); });
+    Object.entries(map).forEach(([k, v]) => { out[k] = v.total / Math.max(1, v.meses.size); });
     return out;
   }, [transactions, refDate]);
 
@@ -3316,11 +3356,11 @@ function OrcamentoTab({ budgets, periodFiltered, refDate, shiftMonth, categories
       let credito = 0;
       for (let i = 6; i >= 1; i--) {
         const d = new Date(refDate.getFullYear(), refDate.getMonth() - i, 1);
-        const gastoMes = transactions.filter((t) => {
-          if (t.type !== "despesa" || t.category !== b.categoryId) return false;
+        const doMes = transactions.filter((t) => {
           const td = new Date(t.date + "T00:00:00");
           return td.getFullYear() === d.getFullYear() && td.getMonth() === d.getMonth();
-        }).reduce((s, t) => s + Number(t.amount), 0);
+        });
+        const gastoMes = gastoDe(b, doMes);
         if (gastoMes === 0) continue;
         credito = Math.max(0, credito + b.limit - gastoMes);
       }
@@ -3329,10 +3369,11 @@ function OrcamentoTab({ budgets, periodFiltered, refDate, shiftMonth, categories
     return out;
   }, [budgets, transactions, refDate]);
 
-  const availableCategories = categoriesByType.despesa.filter((c) => !budgets.some((b) => b.categoryId === c.id));
+  const availableCategories = categoriesByType.despesa.filter((c) => !budgets.some((b) => b.kind !== "conta" && b.categoryId === c.id));
+  const availableAccounts = (banksList || []).filter((c) => !budgets.some((b) => b.kind === "conta" && b.accountId === c.id));
 
   const totalLimit = budgets.reduce((s, b) => s + b.limit + (creditoAcumulado[b.id] || 0), 0);
-  const totalSpent = budgets.reduce((s, b) => s + (spentByCategory[b.categoryId] || 0), 0);
+  const totalSpent = budgets.reduce((s, b) => s + (gastoPorOrcamento[b.id] || 0), 0);
 
   // Dias do mês, para calcular o ritmo de gasto
   const hoje = new Date();
@@ -3340,7 +3381,11 @@ function OrcamentoTab({ budgets, periodFiltered, refDate, shiftMonth, categories
   const diasNoMes = new Date(refDate.getFullYear(), refDate.getMonth() + 1, 0).getDate();
   const diaDeHoje = mesAtual ? hoje.getDate() : diasNoMes;
 
-  const sugestao = budgetForm.categoryId ? mediaHistorica[budgetForm.categoryId] : null;
+  const chaveSugestao = budgetForm.kind === "conta"
+    ? (budgetForm.accountId ? `conta:${budgetForm.accountId}` : null)
+    : (budgetForm.categoryId ? `cat:${budgetForm.categoryId}` : null);
+  const sugestao = chaveSugestao ? mediaHistorica[chaveSugestao] : null;
+  const alvoEscolhido = budgetForm.kind === "conta" ? budgetForm.accountId : budgetForm.categoryId;
 
   return (
     <div>
@@ -3361,11 +3406,22 @@ function OrcamentoTab({ budgets, periodFiltered, refDate, shiftMonth, categories
       {availableCategories.length > 0 ? (
         <div className="rz-card p-5 mb-6">
           <h2 className="text-sm font-semibold mb-3">Novo orçamento</h2>
+          <div className="rz-toggle mb-3" style={{ maxWidth: 340 }}>
+            <button onClick={() => setBudgetForm({ ...budgetForm, kind: "categoria", accountId: "" })} className={budgetForm.kind !== "conta" ? "despesa-on" : "off"} style={budgetForm.kind !== "conta" ? { background: "var(--ink)" } : {}}>Por categoria</button>
+            <button onClick={() => setBudgetForm({ ...budgetForm, kind: "conta", categoryId: "" })} className={budgetForm.kind === "conta" ? "despesa-on" : "off"} style={budgetForm.kind === "conta" ? { background: "var(--ink)" } : {}}>Por conta / cartão</button>
+          </div>
           <div className="flex flex-col sm:flex-row gap-3">
-            <select className="rz-input rz-focus" style={{ flex: "2 1 220px" }} value={budgetForm.categoryId} onChange={(e) => setBudgetForm({ ...budgetForm, categoryId: e.target.value })}>
-              <option value="">Selecione a categoria</option>
-              {availableCategories.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
-            </select>
+            {budgetForm.kind === "conta" ? (
+              <select className="rz-input rz-focus" style={{ flex: "2 1 220px" }} value={budgetForm.accountId} onChange={(e) => setBudgetForm({ ...budgetForm, accountId: e.target.value })}>
+                <option value="">Selecione a conta ou cartão</option>
+                {availableAccounts.map((c) => <option key={c.id} value={c.id}>{c.label}{c.kind === "cartao" ? " (cartão)" : ""}</option>)}
+              </select>
+            ) : (
+              <select className="rz-input rz-focus" style={{ flex: "2 1 220px" }} value={budgetForm.categoryId} onChange={(e) => setBudgetForm({ ...budgetForm, categoryId: e.target.value })}>
+                <option value="">Selecione a categoria</option>
+                {availableCategories.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+              </select>
+            )}
             <input className="rz-input rz-focus rz-mono sm:w-40" inputMode="decimal" placeholder="Limite (R$)" value={budgetForm.limit} onChange={(e) => setBudgetForm({ ...budgetForm, limit: e.target.value })} onKeyDown={(e) => e.key === "Enter" && onAdd()} />
             <button onClick={onAdd} className="rz-btn-primary rz-focus flex items-center justify-center gap-2 text-sm whitespace-nowrap">
               <Plus size={16} /> Adicionar
@@ -3379,21 +3435,21 @@ function OrcamentoTab({ budgets, periodFiltered, refDate, shiftMonth, categories
             >
               <History size={13} /> Usar média histórica: {formatCurrency(sugestao)}/mês
             </button>
-          ) : budgetForm.categoryId ? (
+          ) : alvoEscolhido ? (
             <p className="text-xs mt-3" style={{ color: "var(--ink-soft)" }}>Sem histórico suficiente nessa categoria para sugerir um limite.</p>
           ) : null}
 
           {budgetError && <div className="text-xs mt-2" style={{ color: "var(--brick)" }}>{budgetError}</div>}
         </div>
       ) : budgets.length > 0 ? (
-        <p className="text-xs mb-6" style={{ color: "var(--ink-soft)" }}>Todas as categorias de despesa já têm um orçamento definido.</p>
+        <p className="text-xs mb-6" style={{ color: "var(--ink-soft)" }}>Tudo já tem orçamento definido.</p>
       ) : null}
 
       {budgets.length === 0 ? (
         <div className="rz-card p-10 text-center">
           <Target size={26} className="mx-auto mb-3" style={{ color: "var(--line)" }} />
           <div className="rz-display text-lg mb-1">Nenhum orçamento definido</div>
-          <p className="text-sm" style={{ color: "var(--ink-soft)" }}>Escolha uma categoria acima e defina um limite mensal de gastos.</p>
+          <p className="text-sm" style={{ color: "var(--ink-soft)" }}>Defina um limite mensal por categoria (ex: Alimentação) ou por conta/cartão (ex: quanto posso gastar no cartão).</p>
         </div>
       ) : (
         <div className="grid sm:grid-cols-2 gap-3">
@@ -3401,8 +3457,9 @@ function OrcamentoTab({ budgets, periodFiltered, refDate, shiftMonth, categories
             <BudgetRow
               key={b.id}
               budget={b}
-              spent={spentByCategory[b.categoryId] || 0}
-              category={findCategory("despesa", b.categoryId)}
+              spent={gastoPorOrcamento[b.id] || 0}
+              category={rotuloDe(b)}
+              ehConta={ehConta(b)}
               credito={creditoAcumulado[b.id] || 0}
               onUpdateLimit={onUpdateLimit}
               onDelete={onDelete}
@@ -3418,7 +3475,7 @@ function OrcamentoTab({ budgets, periodFiltered, refDate, shiftMonth, categories
   );
 }
 
-function BudgetRow({ budget, spent, category, credito, onUpdateLimit, onDelete, onToggleRollover, mesAtual, diaDeHoje, diasNoMes }) {
+function BudgetRow({ budget, spent, category, ehConta, credito, onUpdateLimit, onDelete, onToggleRollover, mesAtual, diaDeHoje, diasNoMes }) {
   const [editing, setEditing] = useState(false);
   const [tempLimit, setTempLimit] = useState(String(budget.limit));
 
@@ -3441,6 +3498,9 @@ function BudgetRow({ budget, spent, category, credito, onUpdateLimit, onDelete, 
         <div className="flex items-center gap-2 min-w-0">
           <span className="rz-dot" style={{ background: category.color }} />
           <span className="text-sm font-medium truncate">{category.label}</span>
+          {ehConta && (
+            <span className="rz-mono text-[9px] px-1.5 py-0.5 rounded shrink-0" style={{ background: "var(--paper-alt)", color: "var(--ink-soft)" }}>CONTA</span>
+          )}
         </div>
         {!editing && (
           <div className="flex items-center gap-1 shrink-0">
