@@ -2760,10 +2760,12 @@ function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, s
   const porFormaPagamento = useMemo(() => {
     const agora = new Date();
     const inicio = new Date(agora.getFullYear(), agora.getMonth() - (monthsCount - 1), 1);
+    // Fecha no último dia do mês atual: lançamentos futuros não entram
+    const fim = new Date(agora.getFullYear(), agora.getMonth() + 1, 0, 23, 59, 59);
     const doPeriodo = transactions.filter((t) => {
       if (t.type !== "despesa") return false;
       const d = new Date(t.date + "T00:00:00");
-      return d >= inicio;
+      return d >= inicio && d <= fim;
     });
     const map = {};
     doPeriodo.forEach((t) => {
