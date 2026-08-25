@@ -4,7 +4,7 @@ import {
   BookOpen, Home, Receipt, Repeat, Target, BarChart3, Landmark, Wallet, HandCoins,
   Plus, Trash2, Pencil, X, Check, Search, ChevronLeft, ChevronRight,
   TrendingUp, TrendingDown, Scale, Undo2, Menu, AlertCircle, PauseCircle, PlayCircle,
-  PiggyBank, Minus, PartyPopper, History, Settings, RotateCcw, LogOut, FileUp, FileDown, Users, Copy, Paperclip, Loader2,
+  PiggyBank, Minus, PartyPopper, History, Settings, RotateCcw, LogOut, FileUp, FileDown, Users, Copy, Paperclip, Loader2, Archive,
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -4421,11 +4421,11 @@ function CaixinhaCard({ box, primeira, ultima, onDelete, onContribute, onDeleteH
           <span className="text-sm font-medium truncate">{box.label}</span>
         </div>
         <div className="flex items-center gap-0.5 shrink-0">
-          <button onClick={() => onMove(box.id, -1)} disabled={primeira} className="rz-focus p-1 rounded-md disabled:opacity-25" aria-label="Subir" style={{ color: "var(--ink-soft)" }}><ChevronLeft size={13} style={{ transform: "rotate(90deg)" }} /></button>
-          <button onClick={() => onMove(box.id, 1)} disabled={ultima} className="rz-focus p-1 rounded-md disabled:opacity-25" aria-label="Descer" style={{ color: "var(--ink-soft)" }}><ChevronRight size={13} style={{ transform: "rotate(90deg)" }} /></button>
-          <button onClick={() => { setTempAlvo(box.targetAmount ? String(box.targetAmount) : ""); setTempPrazo(box.deadline || ""); setTempPlano(box.monthlyPlan ? String(box.monthlyPlan) : ""); setEditandoAlvo(true); }} className="rz-focus p-1 rounded-md" aria-label="Definir alvo" style={{ color: "var(--ink-soft)" }}><Pencil size={13} /></button>
-          <button onClick={() => onArchive(box.id)} className="rz-focus p-1 rounded-md" aria-label="Arquivar" style={{ color: "var(--ink-soft)" }}><History size={13} /></button>
-          <button onClick={() => onDelete(box)} className="rz-focus p-1 rounded-md" aria-label="Excluir" style={{ color: "var(--ink-soft)" }}><Trash2 size={13} /></button>
+          <button onClick={() => onMove(box.id, -1)} disabled={primeira} className="rz-focus p-1 rounded-md disabled:opacity-25" aria-label="Mover para cima" title="Mover para cima" style={{ color: "var(--ink-soft)" }}><ChevronLeft size={13} style={{ transform: "rotate(90deg)" }} /></button>
+          <button onClick={() => onMove(box.id, 1)} disabled={ultima} className="rz-focus p-1 rounded-md disabled:opacity-25" aria-label="Mover para baixo" title="Mover para baixo" style={{ color: "var(--ink-soft)" }}><ChevronRight size={13} style={{ transform: "rotate(90deg)" }} /></button>
+          <button onClick={() => { setTempAlvo(box.targetAmount ? String(box.targetAmount) : ""); setTempPrazo(box.deadline || ""); setTempPlano(box.monthlyPlan ? String(box.monthlyPlan) : ""); setEditandoAlvo(true); }} className="rz-focus p-1 rounded-md" aria-label="Definir alvo e prazo" title="Definir alvo, prazo e aporte mensal" style={{ color: "var(--ink-soft)" }}><Pencil size={13} /></button>
+          <button onClick={() => onArchive(box.id)} className="rz-focus p-1 rounded-md" aria-label="Arquivar" title="Arquivar (guarda o histórico, some da lista)" style={{ color: "var(--ink-soft)" }}><Archive size={13} /></button>
+          <button onClick={() => onDelete(box)} className="rz-focus p-1 rounded-md" aria-label="Excluir" title="Excluir caixinha" style={{ color: "var(--ink-soft)" }}><Trash2 size={13} /></button>
         </div>
       </div>
 
@@ -4452,9 +4452,10 @@ function CaixinhaCard({ box, primeira, ultima, onDelete, onContribute, onDeleteH
         </div>
       ) : (
         <>
-          <div className="flex items-baseline justify-between mb-2">
-            <span className="rz-mono text-lg font-semibold" style={{ color: done ? "var(--emerald)" : "var(--ink)" }}>{formatCurrency(atual)}</span>
-            {temAlvo && <span className="rz-mono text-xs" style={{ color: "var(--ink-soft)" }}>de {formatCurrency(box.targetAmount)}</span>}
+          <div className="text-[11px] uppercase tracking-wide mb-0.5" style={{ color: "var(--ink-soft)" }}>Guardado</div>
+          <div className="flex items-baseline justify-between mb-2 gap-2">
+            <span className="rz-mono text-xl font-semibold" style={{ color: done ? "var(--emerald)" : "var(--ink)" }}>{formatCurrency(atual)}</span>
+            {temAlvo && <span className="rz-mono text-xs whitespace-nowrap" style={{ color: "var(--ink-soft)" }}>de {formatCurrency(box.targetAmount)}</span>}
           </div>
 
           {temAlvo && (
@@ -4470,9 +4471,19 @@ function CaixinhaCard({ box, primeira, ultima, onDelete, onContribute, onDeleteH
           )}
 
           {box.monthlyPlan > 0 && (
-            <div className="text-xs mb-2" style={{ color: "var(--ink-soft)" }}>
-              Planejado: {formatCurrency(box.monthlyPlan)}/mês
+            <div className="text-xs mb-2 inline-flex items-center gap-1.5 px-2 py-1 rounded" style={{ background: "var(--paper-alt)", color: "var(--ink-soft)" }}>
+              <Target size={11} /> Guardando {formatCurrency(box.monthlyPlan)}/mês
             </div>
+          )}
+
+          {!temAlvo && (
+            <button
+              onClick={() => { setTempAlvo(""); setTempPrazo(""); setTempPlano(box.monthlyPlan ? String(box.monthlyPlan) : ""); setEditandoAlvo(true); }}
+              className="rz-focus text-xs mb-3 flex items-center gap-1.5"
+              style={{ color: "var(--ink-soft)" }}
+            >
+              <Target size={12} /> Definir um alvo para acompanhar o progresso
+            </button>
           )}
 
           {temAlvo && !done && box.deadline && (
@@ -4487,14 +4498,16 @@ function CaixinhaCard({ box, primeira, ultima, onDelete, onContribute, onDeleteH
             <span className="rz-stamp rz-stamp-pago inline-flex items-center gap-1"><PartyPopper size={11} /> Alvo alcançado</span>
           ) : (
             <>
+              <div className="text-[11px] uppercase tracking-wide mb-1 mt-1" style={{ color: "var(--ink-soft)" }}>Movimentar</div>
               <div className="flex items-center gap-2">
-                <input className="rz-input rz-focus rz-mono text-sm flex-1" inputMode="decimal" placeholder="Valor" value={amount} onChange={(e) => setAmount(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submitDelta(1)} />
-                <button onClick={() => submitDelta(1)} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--emerald)" }} aria-label="Guardar"><Plus size={16} /></button>
-                <button onClick={() => submitDelta(-1)} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--brick)" }} aria-label="Retirar"><Minus size={16} /></button>
+                <input className="rz-input rz-focus rz-mono text-sm flex-1" inputMode="decimal" placeholder="Quanto?" value={amount} onChange={(e) => setAmount(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submitDelta(1)} />
+                <button onClick={() => submitDelta(1)} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--emerald)" }} aria-label="Guardar" title="Guardar este valor"><Plus size={16} /></button>
+                <button onClick={() => submitDelta(-1)} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--brick)" }} aria-label="Retirar" title="Retirar este valor"><Minus size={16} /></button>
               </div>
 
+              <div className="text-[11px] uppercase tracking-wide mb-1 mt-3" style={{ color: "var(--ink-soft)" }}>De onde vem / para onde vai</div>
               <select
-                className="rz-input rz-focus text-xs mt-2"
+                className="rz-input rz-focus text-xs"
                 value={contaOrigem}
                 onChange={(e) => setContaOrigem(e.target.value)}
               >
