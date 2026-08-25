@@ -354,6 +354,7 @@ export default function App() {
   const [categoryForm, setCategoryForm] = useState({ label: "", type: "despesa", color: COLOR_PALETTE[0] });
   const [categoryError, setCategoryError] = useState("");
   const [hiddenDefaultCategories, setHiddenDefaultCategories] = useState([]);
+  const [categoryOrder, setCategoryOrder] = useState({ receita: [], despesa: [] });
 
   const [customBanks, setCustomBanks] = useState([]);
   const [banksLoaded, setBanksLoaded] = useState(false);
@@ -511,6 +512,27 @@ export default function App() {
       }
     })();
   }, [hiddenDefaultCategories, categoriesLoaded]);
+
+  // ---------- Load/save ordem das categorias ----------
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await storage.get("ordem_categorias", false);
+        if (res && res.value) setCategoryOrder(JSON.parse(res.value));
+      } catch (e) { /* ainda não existe */ }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!categoriesLoaded) return;
+    (async () => {
+      try {
+        await storage.set("ordem_categorias", JSON.stringify(categoryOrder), false);
+      } catch (e) {
+        setLoadError(true);
+      }
+    })();
+  }, [categoryOrder, categoriesLoaded]);
 
   // ---------- Load custom banks ----------
   useEffect(() => {
@@ -718,10 +740,20 @@ export default function App() {
   }, [toast]);
 
   // ---------- Derived data ----------
-  const categoriesByType = useMemo(() => ({
-    receita: [...CATEGORIES.receita.filter((c) => !hiddenDefaultCategories.includes(c.id)), ...customCategories.filter((c) => c.type === "receita")],
-    despesa: [...CATEGORIES.despesa.filter((c) => !hiddenDefaultCategories.includes(c.id)), ...customCategories.filter((c) => c.type === "despesa")],
-  }), [customCategories, hiddenDefaultCategories]);
+  const categoriesByType = useMemo(() => {
+    // Aplica a ordem escolhida pelo usuário; categorias novas (ainda sem
+    // posição definida) vão para o fim da lista.
+    const aplicarOrdem = (lista, ordem) => {
+      if (!ordem || ordem.length === 0) return lista;
+      const pos = {};
+      ordem.forEach((id, i) => { pos[id] = i; });
+      return [...lista].sort((a, b) => (pos[a.id] ?? 9999) - (pos[b.id] ?? 9999));
+    };
+    return {
+      receita: aplicarOrdem([...CATEGORIES.receita.filter((c) => !hiddenDefaultCategories.includes(c.id)), ...customCategories.filter((c) => c.type === "receita")], categoryOrder.receita),
+      despesa: aplicarOrdem([...CATEGORIES.despesa.filter((c) => !hiddenDefaultCategories.includes(c.id)), ...customCategories.filter((c) => c.type === "despesa")], categoryOrder.despesa),
+    };
+  }, [customCategories, hiddenDefaultCategories, categoryOrder]);
 
   const findCategory = (type, id) => {
     const allTypeCats = [...(CATEGORIES[type] || []), ...customCategories.filter((c) => c.type === type)];
@@ -1062,6 +1094,22 @@ export default function App() {
 
   const handleRestoreDefaultCategories = () => setHiddenDefaultCategories([]);
 
+  const handleSortCategories = (tipo) => {
+    const ordenadas = [...categoriesByType[tipo]]
+      .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"))
+      .map((c) => c.id);
+    setCategoryOrder((prev) => ({ ...prev, [tipo]: ordenadas }));
+  };
+
+  const handleMoveCategory = (tipo, id, direcao) => {
+    const atual = categoriesByType[tipo].map((c) => c.id);
+    const idx = atual.indexOf(id);
+    const alvo = idx + direcao;
+    if (idx < 0 || alvo < 0 || alvo >= atual.length) return;
+    [atual[idx], atual[alvo]] = [atual[alvo], atual[idx]];
+    setCategoryOrder((prev) => ({ ...prev, [tipo]: atual }));
+  };
+
   const handleUpdateCategory = (cat, newLabel, newColor) => {
     const label = newLabel.trim();
     if (!label) return;
@@ -1310,6 +1358,7 @@ export default function App() {
         lancamentos: transactions,
         categorias_personalizadas: customCategories,
         categorias_padrao_ocultas: hiddenDefaultCategories,
+        ordem_categorias: categoryOrder,
         bancos_personalizados: customBanks,
         bancos_padrao_ocultos: hiddenDefaultBanks,
         contas_fixas: fixedBills,
@@ -1340,6 +1389,7 @@ export default function App() {
         if (d.lancamentos) setTransactions(d.lancamentos);
         if (d.categorias_personalizadas) setCustomCategories(d.categorias_personalizadas);
         if (d.categorias_padrao_ocultas) setHiddenDefaultCategories(d.categorias_padrao_ocultas);
+        if (d.ordem_categorias) setCategoryOrder(d.ordem_categorias);
         if (d.bancos_personalizados) setCustomBanks(d.bancos_personalizados);
         if (d.bancos_padrao_ocultos) setHiddenDefaultBanks(d.bancos_padrao_ocultos);
         if (d.contas_fixas) setFixedBills(d.contas_fixas);
@@ -1516,6 +1566,8 @@ export default function App() {
             onAddCategory={handleAddCategory}
             onDeleteCategory={handleDeleteCategory}
             onUpdateCategory={handleUpdateCategory}
+            onSortCategories={handleSortCategories}
+            onMoveCategory={handleMoveCategory}
             hiddenCategoriesCount={hiddenDefaultCategories.length}
             onRestoreCategories={handleRestoreDefaultCategories}
             banksList={banksList}
@@ -2129,7 +2181,7 @@ function formatCompact(v) {
 function ConfiguracoesTab({
   theme, setTheme,
   categoriesByType, customCategories, categoryForm, setCategoryForm, categoryError,
-  onAddCategory, onDeleteCategory, onUpdateCategory, hiddenCategoriesCount, onRestoreCategories,
+  onAddCategory, onDeleteCategory, onUpdateCategory, onSortCategories, onMoveCategory, hiddenCategoriesCount, onRestoreCategories,
   banksList, customBanks, bankForm, setBankForm, bankError,
   onAddBank, onDeleteBank, onUpdateBank, hiddenBanksCount, onRestoreBanks,
   onExportBackup, onImportBackup, backupMessage, onResetData,
@@ -2178,6 +2230,8 @@ function ConfiguracoesTab({
           onAdd={onAddCategory}
           onDelete={onDeleteCategory}
           onUpdate={onUpdateCategory}
+          onSort={onSortCategories}
+          onMove={onMoveCategory}
           hiddenCount={hiddenCategoriesCount}
           onRestore={onRestoreCategories}
         />
@@ -4959,7 +5013,7 @@ function BancosTab({ banksList, customBanks, bankForm, setBankForm, bankError, o
   );
 }
 
-function CategoriasTab({ categoriesByType, customCategories, categoryForm, setCategoryForm, categoryError, onAdd, onDelete, onUpdate, hiddenCount, onRestore }) {
+function CategoriasTab({ categoriesByType, customCategories, categoryForm, setCategoryForm, categoryError, onAdd, onDelete, onUpdate, onSort, onMove, hiddenCount, onRestore }) {
   return (
     <div>
       <header className="mb-6 flex items-start justify-between gap-4 flex-wrap">
@@ -5019,18 +5073,36 @@ function CategoriasTab({ categoriesByType, customCategories, categoryForm, setCa
       {/* Category lists */}
       <div className="grid sm:grid-cols-2 gap-4">
         <div>
-          <h3 className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: "var(--ink-soft)" }}>Receitas</h3>
+          <div className="flex items-center justify-between mb-2 gap-2">
+            <h3 className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--ink-soft)" }}>Receitas</h3>
+            <button onClick={() => onSort("receita")} className="rz-btn-ghost rz-focus text-xs !py-1 !px-2.5" title="Ordenar de A a Z">A → Z</button>
+          </div>
           <div className="rz-card overflow-hidden">
             {categoriesByType.receita.map((c, i) => (
-              <CategoryRow key={c.id} cat={c} isFirst={i === 0} isCustom={customCategories.some((x) => x.id === c.id)} onDelete={onDelete} onUpdate={onUpdate} />
+              <CategoryRow
+                key={c.id} cat={c} isFirst={i === 0}
+                isCustom={customCategories.some((x) => x.id === c.id)}
+                onDelete={onDelete} onUpdate={onUpdate}
+                onMove={(dir) => onMove("receita", c.id, dir)}
+                primeira={i === 0} ultima={i === categoriesByType.receita.length - 1}
+              />
             ))}
           </div>
         </div>
         <div>
-          <h3 className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: "var(--ink-soft)" }}>Despesas</h3>
+          <div className="flex items-center justify-between mb-2 gap-2">
+            <h3 className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--ink-soft)" }}>Despesas</h3>
+            <button onClick={() => onSort("despesa")} className="rz-btn-ghost rz-focus text-xs !py-1 !px-2.5" title="Ordenar de A a Z">A → Z</button>
+          </div>
           <div className="rz-card overflow-hidden">
             {categoriesByType.despesa.map((c, i) => (
-              <CategoryRow key={c.id} cat={c} isFirst={i === 0} isCustom={customCategories.some((x) => x.id === c.id)} onDelete={onDelete} onUpdate={onUpdate} />
+              <CategoryRow
+                key={c.id} cat={c} isFirst={i === 0}
+                isCustom={customCategories.some((x) => x.id === c.id)}
+                onDelete={onDelete} onUpdate={onUpdate}
+                onMove={(dir) => onMove("despesa", c.id, dir)}
+                primeira={i === 0} ultima={i === categoriesByType.despesa.length - 1}
+              />
             ))}
           </div>
         </div>
@@ -5042,7 +5114,7 @@ function CategoriasTab({ categoriesByType, customCategories, categoryForm, setCa
   );
 }
 
-function CategoryRow({ cat, isFirst, isCustom, onDelete, onUpdate, isBank }) {
+function CategoryRow({ cat, isFirst, isCustom, onDelete, onUpdate, isBank, onMove, primeira, ultima }) {
   const [editing, setEditing] = useState(false);
   const [tempLabel, setTempLabel] = useState(cat.label);
   const [tempColor, setTempColor] = useState(cat.color);
@@ -5113,6 +5185,16 @@ function CategoryRow({ cat, isFirst, isCustom, onDelete, onUpdate, isBank }) {
         ) : null}
       </div>
       {!isCustom && <span className="rz-mono text-[9px] opacity-50">PADRÃO</span>}
+      {onMove && (
+        <>
+          <button onClick={() => onMove(-1)} disabled={primeira} className="rz-focus p-1 rounded-md disabled:opacity-25" aria-label="Mover para cima" title="Mover para cima" style={{ color: "var(--ink-soft)" }}>
+            <ChevronLeft size={12} style={{ transform: "rotate(90deg)" }} />
+          </button>
+          <button onClick={() => onMove(1)} disabled={ultima} className="rz-focus p-1 rounded-md disabled:opacity-25" aria-label="Mover para baixo" title="Mover para baixo" style={{ color: "var(--ink-soft)" }}>
+            <ChevronRight size={12} style={{ transform: "rotate(90deg)" }} />
+          </button>
+        </>
+      )}
       {onUpdate && (
         <button onClick={startEdit} className="rz-focus p-1 rounded-md" aria-label="Editar" title="Editar nome e cor" style={{ color: "var(--ink-soft)" }}>
           <Pencil size={13} />
