@@ -1390,7 +1390,7 @@ export default function App() {
               <div className="text-[11px] leading-tight" style={{ color: "#8FA090" }}>controle financeiro</div>
             </div>
           </div>
-          <button className="md:hidden rz-focus" onClick={() => setMobileNavOpen((v) => !v)} aria-label="Abrir menu">
+          <button className="md:hidden rz-focus" onClick={() => setMobileNavOpen((v) => !v)} aria-label="Abrir menu" title="Abrir menu">
             <Menu size={22} color="#EEF1E7" />
           </button>
         </div>
@@ -1802,7 +1802,7 @@ export default function App() {
           <div className="rz-card w-full sm:max-w-md p-5 sm:p-6" style={{ borderRadius: "14px 14px 0 0" }}>
             <div className="flex items-center justify-between mb-4">
               <h2 className="rz-display text-xl">{editingId ? "Editar lançamento" : "Novo lançamento"}</h2>
-              <button onClick={() => { setShowForm(false); resetForm(); }} className="rz-focus" style={{ color: "var(--ink-soft)" }} aria-label="Fechar">
+              <button onClick={() => { setShowForm(false); resetForm(); }} className="rz-focus" style={{ color: "var(--ink-soft)" }} aria-label="Fechar" title="Fechar sem salvar">
                 <X size={20} />
               </button>
             </div>
@@ -1934,7 +1934,7 @@ export default function App() {
                     <button type="button" onClick={() => handleOpenAttachment(form.attachmentPath)} className="rz-btn-ghost rz-focus text-xs !py-2 flex items-center gap-1.5 flex-1 min-w-0 justify-start">
                       <Paperclip size={13} className="shrink-0" /> <span className="truncate">{form.attachmentName || "Ver arquivo"}</span>
                     </button>
-                    <button type="button" onClick={handleRemoveAttachment} className="rz-focus p-1.5 rounded-md shrink-0" aria-label="Remover anexo" style={{ color: "var(--brick)" }}>
+                    <button type="button" onClick={handleRemoveAttachment} className="rz-focus p-1.5 rounded-md shrink-0" aria-label="Remover anexo" title="Remover este anexo" style={{ color: "var(--brick)" }}>
                       <X size={15} />
                     </button>
                   </div>
@@ -1972,7 +1972,7 @@ export default function App() {
           onClick={() => { setQuickError(""); setShowQuickAdd(true); }}
           className="rz-focus md:hidden fixed z-40 rounded-full shadow-lg flex items-center justify-center"
           style={{ bottom: 20, right: 20, width: 56, height: 56, background: "var(--ink)", color: "var(--paper)" }}
-          aria-label="Lançamento rápido"
+          aria-label="Lançamento rápido" title="Lançamento rápido"
         >
           <Plus size={26} />
         </button>
@@ -1983,7 +1983,7 @@ export default function App() {
           <div className="rz-card w-full sm:max-w-sm p-5" style={{ borderRadius: "14px 14px 0 0" }}>
             <div className="flex items-center justify-between mb-4">
               <h2 className="rz-display text-xl">Lançamento rápido</h2>
-              <button onClick={() => setShowQuickAdd(false)} className="rz-focus" style={{ color: "var(--ink-soft)" }} aria-label="Fechar">
+              <button onClick={() => setShowQuickAdd(false)} className="rz-focus" style={{ color: "var(--ink-soft)" }} aria-label="Fechar" title="Fechar sem salvar">
                 <X size={20} />
               </button>
             </div>
@@ -2081,13 +2081,13 @@ function PeriodNavigator({ periodMode, refDate, shiftMonth, setPeriodMode, hideT
   return (
     <div className="flex flex-wrap items-center gap-3 mb-5">
       <div className="rz-card flex items-center gap-1 px-1 py-1">
-        <button onClick={() => shiftMonth(-1)} disabled={periodMode === "todos"} className="rz-focus p-1.5 rounded-md disabled:opacity-30" style={{ color: "var(--ink-soft)" }} aria-label="Mês anterior">
+        <button onClick={() => shiftMonth(-1)} disabled={periodMode === "todos"} className="rz-focus p-1.5 rounded-md disabled:opacity-30" style={{ color: "var(--ink-soft)" }} aria-label="Mês anterior" title="Mês anterior">
           <ChevronLeft size={16} />
         </button>
         <div className="rz-mono text-sm px-2 min-w-[150px] text-center">
           {periodMode === "todos" ? "Todos os períodos" : `${MONTHS[refDate.getMonth()]} / ${refDate.getFullYear()}`}
         </div>
-        <button onClick={() => shiftMonth(1)} disabled={periodMode === "todos"} className="rz-focus p-1.5 rounded-md disabled:opacity-30" style={{ color: "var(--ink-soft)" }} aria-label="Próximo mês">
+        <button onClick={() => shiftMonth(1)} disabled={periodMode === "todos"} className="rz-focus p-1.5 rounded-md disabled:opacity-30" style={{ color: "var(--ink-soft)" }} aria-label="Próximo mês" title="Próximo mês">
           <ChevronRight size={16} />
         </button>
       </div>
@@ -2435,7 +2435,7 @@ function TemaSection({ theme, setTheme }) {
                   onChange={(e) => updateColor(f.key, e.target.value)}
                   className="rz-focus"
                   style={{ width: 40, height: 32, border: "1px solid var(--line)", borderRadius: 6, padding: 2, background: "var(--surface)", cursor: "pointer" }}
-                  aria-label={`Cor: ${f.label}`}
+                  aria-label={`Cor: ${f.label} title="Usar esta cor"`}
                 />
               </div>
             </div>
@@ -3245,7 +3245,7 @@ function BudgetRow({ budget, spent, category, credito, onUpdateLimit, onDelete, 
             <button onClick={() => { setTempLimit(String(budget.limit)); setEditing(true); }} className="rz-focus p-1 rounded-md" aria-label="Editar limite" style={{ color: "var(--ink-soft)" }}>
               <Pencil size={13} />
             </button>
-            <button onClick={() => onDelete(budget)} className="rz-focus p-1 rounded-md" aria-label="Excluir orçamento" style={{ color: "var(--ink-soft)" }}>
+            <button onClick={() => onDelete(budget)} className="rz-focus p-1 rounded-md" aria-label="Excluir orçamento" title="Excluir este orçamento" style={{ color: "var(--ink-soft)" }}>
               <Trash2 size={13} />
             </button>
           </div>
@@ -3255,8 +3255,8 @@ function BudgetRow({ budget, spent, category, credito, onUpdateLimit, onDelete, 
       {editing ? (
         <div className="flex items-center gap-2 mb-2">
           <input className="rz-input rz-focus rz-mono text-sm flex-1" value={tempLimit} onChange={(e) => setTempLimit(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveEdit()} autoFocus />
-          <button onClick={saveEdit} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--emerald)" }} aria-label="Salvar"><Check size={16} /></button>
-          <button onClick={() => setEditing(false)} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--ink-soft)" }} aria-label="Cancelar"><X size={16} /></button>
+          <button onClick={saveEdit} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--emerald)" }} aria-label="Salvar" title="Salvar novo limite"><Check size={16} /></button>
+          <button onClick={() => setEditing(false)} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--ink-soft)" }} aria-label="Cancelar" title="Cancelar edição"><X size={16} /></button>
         </div>
       ) : (
         <div className="flex items-baseline justify-between mb-2">
@@ -3377,13 +3377,13 @@ function FixedBillsTab({
                   ) : (
                     <button onClick={() => onLaunch(b)} className="rz-btn-primary rz-focus text-xs !py-1.5 !px-3">Lançar</button>
                   )}
-                  <button onClick={() => onToggleActive(b)} className="rz-focus p-1.5 rounded-md" aria-label="Pausar" style={{ color: "var(--ink-soft)" }}>
+                  <button onClick={() => onToggleActive(b)} className="rz-focus p-1.5 rounded-md" aria-label="Pausar" title="Pausar esta conta fixa" style={{ color: "var(--ink-soft)" }}>
                     <PauseCircle size={15} />
                   </button>
-                  <button onClick={() => onOpenEdit(b)} className="rz-focus p-1.5 rounded-md" aria-label="Editar" style={{ color: "var(--ink-soft)" }}>
+                  <button onClick={() => onOpenEdit(b)} className="rz-focus p-1.5 rounded-md" aria-label="Editar" title="Editar conta fixa" style={{ color: "var(--ink-soft)" }}>
                     <Pencil size={15} />
                   </button>
-                  <button onClick={() => onDelete(b)} className="rz-focus p-1.5 rounded-md" aria-label="Excluir" style={{ color: "var(--ink-soft)" }}>
+                  <button onClick={() => onDelete(b)} className="rz-focus p-1.5 rounded-md" aria-label="Excluir" title="Excluir conta fixa" style={{ color: "var(--ink-soft)" }}>
                     <Trash2 size={15} />
                   </button>
                 </div>
@@ -3443,10 +3443,10 @@ function FixedBillsTab({
                         <div className="text-xs" style={{ color: "var(--ink-soft)" }}>{cat.label} · Vence dia {b.dueDay}</div>
                       </div>
                       <div className="rz-mono text-sm w-24 text-right shrink-0" style={{ color: "var(--ink-soft)" }}>{formatCurrency(b.amount)}</div>
-                      <button onClick={() => onToggleActive(b)} className="rz-focus p-1.5 rounded-md" aria-label="Reativar" style={{ color: "var(--emerald)" }}>
+                      <button onClick={() => onToggleActive(b)} className="rz-focus p-1.5 rounded-md" aria-label="Reativar" title="Reativar esta conta fixa" style={{ color: "var(--emerald)" }}>
                         <PlayCircle size={15} />
                       </button>
-                      <button onClick={() => onDelete(b)} className="rz-focus p-1.5 rounded-md" aria-label="Excluir" style={{ color: "var(--ink-soft)" }}>
+                      <button onClick={() => onDelete(b)} className="rz-focus p-1.5 rounded-md" aria-label="Excluir" title="Excluir conta fixa" style={{ color: "var(--ink-soft)" }}>
                         <Trash2 size={15} />
                       </button>
                     </div>
@@ -3464,7 +3464,7 @@ function FixedBillsTab({
           <div className="rz-card w-full sm:max-w-md p-5 sm:p-6" style={{ borderRadius: "14px 14px 0 0" }}>
             <div className="flex items-center justify-between mb-4">
               <h2 className="rz-display text-xl">{editingFixedId ? "Editar conta fixa" : "Nova conta fixa"}</h2>
-              <button onClick={onCancelForm} className="rz-focus" style={{ color: "var(--ink-soft)" }} aria-label="Fechar">
+              <button onClick={onCancelForm} className="rz-focus" style={{ color: "var(--ink-soft)" }} aria-label="Fechar" title="Fechar sem salvar">
                 <X size={20} />
               </button>
             </div>
@@ -3598,7 +3598,7 @@ function CsvImportModal({ categoriesByType, banksList, onConfirm, onCancel, cate
       <div className="rz-card w-full sm:max-w-2xl p-5 sm:p-6" style={{ borderRadius: "14px 14px 0 0", maxHeight: "90vh", overflowY: "auto" }}>
         <div className="flex items-center justify-between mb-4">
           <h2 className="rz-display text-xl">Importar extrato (CSV)</h2>
-          <button onClick={onCancel} className="rz-focus" style={{ color: "var(--ink-soft)" }} aria-label="Fechar"><X size={20} /></button>
+          <button onClick={onCancel} className="rz-focus" style={{ color: "var(--ink-soft)" }} aria-label="Fechar" title="Fechar sem salvar"><X size={20} /></button>
         </div>
 
         {rows.length === 0 ? (
@@ -3767,10 +3767,10 @@ function DividasTab({ debts, debtForm, setDebtForm, showDebtForm, editingDebtId,
                       </div>
                     </div>
                     <span className="rz-mono text-sm whitespace-nowrap" style={{ color: "var(--ink-soft)" }}>{formatCurrency(d.amount)}</span>
-                    <button onClick={() => onToggleSettled(d)} className="rz-focus p-1.5 rounded-md" aria-label="Reabrir" style={{ color: "var(--ink-soft)" }}>
+                    <button onClick={() => onToggleSettled(d)} className="rz-focus p-1.5 rounded-md" aria-label="Reabrir" title="Reabrir esta dívida" style={{ color: "var(--ink-soft)" }}>
                       <RotateCcw size={14} />
                     </button>
-                    <button onClick={() => onDelete(d)} className="rz-focus p-1.5 rounded-md" aria-label="Excluir" style={{ color: "var(--ink-soft)" }}>
+                    <button onClick={() => onDelete(d)} className="rz-focus p-1.5 rounded-md" aria-label="Excluir" title="Excluir dívida" style={{ color: "var(--ink-soft)" }}>
                       <Trash2 size={14} />
                     </button>
                   </div>
@@ -3786,7 +3786,7 @@ function DividasTab({ debts, debtForm, setDebtForm, showDebtForm, editingDebtId,
           <div className="rz-card w-full sm:max-w-md p-5 sm:p-6" style={{ borderRadius: "14px 14px 0 0", maxHeight: "90vh", overflowY: "auto" }}>
             <div className="flex items-center justify-between mb-4">
               <h2 className="rz-display text-xl">{editingDebtId ? "Editar dívida" : "Nova dívida"}</h2>
-              <button onClick={onCancelForm} className="rz-focus" style={{ color: "var(--ink-soft)" }} aria-label="Fechar"><X size={20} /></button>
+              <button onClick={onCancelForm} className="rz-focus" style={{ color: "var(--ink-soft)" }} aria-label="Fechar" title="Fechar sem salvar"><X size={20} /></button>
             </div>
 
             <div className="rz-toggle mb-4">
@@ -4003,8 +4003,8 @@ function DebtCard({ debt, onEdit, onDelete, onPayment, onToggleSettled, categori
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          <button onClick={() => onEdit(debt)} className="rz-focus p-1 rounded-md" aria-label="Editar" style={{ color: "var(--ink-soft)" }}><Pencil size={13} /></button>
-          <button onClick={() => onDelete(debt)} className="rz-focus p-1 rounded-md" aria-label="Excluir" style={{ color: "var(--ink-soft)" }}><Trash2 size={13} /></button>
+          <button onClick={() => onEdit(debt)} className="rz-focus p-1 rounded-md" aria-label="Editar" title="Editar dívida" style={{ color: "var(--ink-soft)" }}><Pencil size={13} /></button>
+          <button onClick={() => onDelete(debt)} className="rz-focus p-1 rounded-md" aria-label="Excluir" title="Excluir dívida" style={{ color: "var(--ink-soft)" }}><Trash2 size={13} /></button>
         </div>
       </div>
 
@@ -4045,7 +4045,7 @@ function DebtCard({ debt, onEdit, onDelete, onPayment, onToggleSettled, categori
           onChange={(e) => setValor(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && registrar()}
         />
-        <button onClick={registrar} className="rz-focus p-1.5 rounded-md" style={{ color: cor }} aria-label="Registrar acerto"><Plus size={16} /></button>
+        <button onClick={registrar} className="rz-focus p-1.5 rounded-md" style={{ color: cor }} aria-label="Registrar acerto" title="Registrar este acerto"><Plus size={16} /></button>
         <button onClick={() => onToggleSettled(debt)} className="rz-btn-ghost rz-focus text-xs !py-1.5 !px-3 whitespace-nowrap">Quitar</button>
       </div>
 
@@ -4256,7 +4256,7 @@ function CaixinhasTab({ boxes, savingsForm, setSavingsForm, savingsError, onAdd,
               onClick={() => setSavingsForm({ ...savingsForm, color })}
               className="rz-focus w-6 h-6 rounded-full"
               style={{ background: color, boxShadow: savingsForm.color === color ? "0 0 0 2px var(--surface), 0 0 0 4px var(--ink)" : "none" }}
-              aria-label={`Cor ${color}`}
+              aria-label={`Cor ${color} title="Usar esta cor"`}
             />
           ))}
         </div>
@@ -4303,10 +4303,10 @@ function CaixinhasTab({ boxes, savingsForm, setSavingsForm, savingsError, onAdd,
                   )}
                 </div>
                 <span className="rz-mono text-sm whitespace-nowrap" style={{ color: "var(--ink-soft)" }}>{formatCurrency(b.currentAmount)}</span>
-                <button onClick={() => onArchive(b.id)} className="rz-focus p-1.5 rounded-md" aria-label="Reativar" style={{ color: "var(--emerald)" }}>
+                <button onClick={() => onArchive(b.id)} className="rz-focus p-1.5 rounded-md" aria-label="Reativar" title="Reativar esta caixinha" style={{ color: "var(--emerald)" }}>
                   <RotateCcw size={14} />
                 </button>
-                <button onClick={() => onDelete(b)} className="rz-focus p-1.5 rounded-md" aria-label="Excluir" style={{ color: "var(--ink-soft)" }}>
+                <button onClick={() => onDelete(b)} className="rz-focus p-1.5 rounded-md" aria-label="Excluir" title="Excluir caixinha" style={{ color: "var(--ink-soft)" }}>
                   <Trash2 size={14} />
                 </button>
               </div>
@@ -4320,7 +4320,7 @@ function CaixinhasTab({ boxes, savingsForm, setSavingsForm, savingsError, onAdd,
           <div className="rz-card w-full sm:max-w-md p-5 sm:p-6" style={{ borderRadius: "14px 14px 0 0" }}>
             <div className="flex items-center justify-between mb-4">
               <h2 className="rz-display text-xl">Mover entre caixinhas</h2>
-              <button onClick={() => setShowTransfer(false)} className="rz-focus" style={{ color: "var(--ink-soft)" }} aria-label="Fechar"><X size={20} /></button>
+              <button onClick={() => setShowTransfer(false)} className="rz-focus" style={{ color: "var(--ink-soft)" }} aria-label="Fechar" title="Fechar sem salvar"><X size={20} /></button>
             </div>
             <div className="flex flex-col gap-3">
               <div>
@@ -4577,7 +4577,7 @@ function CaixinhaCard({ box, primeira, ultima, onDelete, onContribute, onDeleteH
                   <span className="rz-mono text-xs font-semibold" style={{ color: h.amount >= 0 ? "var(--emerald)" : "var(--brick)" }}>
                     {h.amount >= 0 ? "+ " : "− "}{formatCurrency(Math.abs(h.amount))}
                   </span>
-                  <button onClick={() => onDeleteHistoryEntry(box.id, h.id)} className="rz-focus p-1 rounded-md" aria-label="Excluir movimentação" style={{ color: "var(--ink-soft)" }}>
+                  <button onClick={() => onDeleteHistoryEntry(box.id, h.id)} className="rz-focus p-1 rounded-md" aria-label="Excluir movimentação" title="Excluir esta movimentação" style={{ color: "var(--ink-soft)" }}>
                     <Trash2 size={12} />
                   </button>
                 </div>
@@ -4870,7 +4870,7 @@ function BancosTab({ banksList, customBanks, bankForm, setBankForm, bankError, o
                 background: color,
                 boxShadow: bankForm.color === color ? "0 0 0 2px var(--surface), 0 0 0 4px var(--ink)" : "none",
               }}
-              aria-label={`Cor ${color}`}
+              aria-label={`Cor ${color} title="Usar esta cor"`}
             />
           ))}
         </div>
@@ -4946,7 +4946,7 @@ function CategoriasTab({ categoriesByType, customCategories, categoryForm, setCa
                 background: color,
                 boxShadow: categoryForm.color === color ? "0 0 0 2px var(--surface), 0 0 0 4px var(--ink)" : "none",
               }}
-              aria-label={`Cor ${color}`}
+              aria-label={`Cor ${color} title="Usar esta cor"`}
             />
           ))}
         </div>
@@ -5009,8 +5009,8 @@ function CategoryRow({ cat, isFirst, isCustom, onDelete, onUpdate, isBank }) {
             onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }}
             autoFocus
           />
-          <button onClick={save} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--emerald)" }} aria-label="Salvar"><Check size={16} /></button>
-          <button onClick={() => setEditing(false)} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--ink-soft)" }} aria-label="Cancelar"><X size={16} /></button>
+          <button onClick={save} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--emerald)" }} aria-label="Salvar" title="Salvar alterações"><Check size={16} /></button>
+          <button onClick={() => setEditing(false)} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--ink-soft)" }} aria-label="Cancelar" title="Cancelar edição"><X size={16} /></button>
         </div>
         <div className="flex flex-wrap gap-1.5">
           {COLOR_PALETTE.map((color) => (
@@ -5019,7 +5019,7 @@ function CategoryRow({ cat, isFirst, isCustom, onDelete, onUpdate, isBank }) {
               onClick={() => setTempColor(color)}
               className="rz-focus w-5 h-5 rounded-full"
               style={{ background: color, boxShadow: tempColor === color ? "0 0 0 2px var(--surface), 0 0 0 3px var(--ink)" : "none" }}
-              aria-label={`Cor ${color}`}
+              aria-label={`Cor ${color} title="Usar esta cor"`}
             />
           ))}
         </div>
@@ -5052,11 +5052,11 @@ function CategoryRow({ cat, isFirst, isCustom, onDelete, onUpdate, isBank }) {
       </div>
       {!isCustom && <span className="rz-mono text-[9px] opacity-50">PADRÃO</span>}
       {onUpdate && (
-        <button onClick={startEdit} className="rz-focus p-1 rounded-md" aria-label="Editar" style={{ color: "var(--ink-soft)" }}>
+        <button onClick={startEdit} className="rz-focus p-1 rounded-md" aria-label="Editar" title="Editar nome e cor" style={{ color: "var(--ink-soft)" }}>
           <Pencil size={13} />
         </button>
       )}
-      <button onClick={() => onDelete(cat)} className="rz-focus p-1 rounded-md" aria-label="Excluir" style={{ color: "var(--ink-soft)" }}>
+      <button onClick={() => onDelete(cat)} className="rz-focus p-1 rounded-md" aria-label="Excluir" title="Excluir" style={{ color: "var(--ink-soft)" }}>
         <Trash2 size={14} />
       </button>
     </div>
