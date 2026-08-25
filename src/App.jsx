@@ -2243,9 +2243,13 @@ function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, s
     const despesaMedia = monthlyData.length
       ? monthlyData.reduce((s, m) => s + m.despesas, 0) / monthlyData.length : 0;
 
-    // Taxa de poupança: quanto sobrou da receita, em média
-    const taxaPoupanca = comReceita.length
-      ? (comReceita.reduce((s, m) => s + (m.receitas - m.despesas) / m.receitas, 0) / comReceita.length) * 100
+    // Taxa de poupança: soma tudo primeiro e divide uma vez só. Tirar a média
+    // das porcentagens mensais distorceria o resultado, porque um mês com
+    // receita muito baixa geraria uma porcentagem absurda.
+    const totalReceitas = monthlyData.reduce((s, m) => s + m.receitas, 0);
+    const totalDespesas = monthlyData.reduce((s, m) => s + m.despesas, 0);
+    const taxaPoupanca = totalReceitas > 0
+      ? ((totalReceitas - totalDespesas) / totalReceitas) * 100
       : null;
 
     // Comprometimento: total de contas fixas ativas sobre a receita média
@@ -2254,7 +2258,7 @@ function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, s
       .reduce((s, b) => s + getAmountForPeriod(b, new Date()), 0);
     const comprometimento = receitaMedia > 0 ? (totalFixas / receitaMedia) * 100 : null;
 
-    return { receitaMedia, despesaMedia, taxaPoupanca, totalFixas, comprometimento };
+    return { receitaMedia, despesaMedia, taxaPoupanca, totalReceitas, totalDespesas, totalFixas, comprometimento };
   }, [monthlyData, fixedBills]);
 
   // ---- Média mensal por categoria ----
@@ -2401,7 +2405,9 @@ function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, s
             {indicadores.taxaPoupanca === null ? "—" : `${indicadores.taxaPoupanca.toFixed(0)}%`}
           </div>
           <p className="text-xs mt-1" style={{ color: "var(--ink-soft)" }}>
-            Do que você ganha, quanto sobra em média
+            {indicadores.taxaPoupanca === null
+              ? "Sem receitas no período"
+              : `Sobrou ${formatCurrency(indicadores.totalReceitas - indicadores.totalDespesas)} de ${formatCurrency(indicadores.totalReceitas)}`}
           </p>
         </div>
 
