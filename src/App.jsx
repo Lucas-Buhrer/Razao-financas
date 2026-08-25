@@ -4,7 +4,7 @@ import {
   BookOpen, Home, Receipt, Repeat, Target, BarChart3, Landmark, Wallet, HandCoins, CreditCard,
   Plus, Trash2, Pencil, X, Check, Search, ChevronLeft, ChevronRight,
   TrendingUp, TrendingDown, Scale, Undo2, Menu, AlertCircle, PauseCircle, PlayCircle,
-  PiggyBank, Minus, PartyPopper, History, Settings, RotateCcw, LogOut, FileUp, FileDown, Users, Copy, Paperclip, Loader2, Archive,
+  PiggyBank, Minus, PartyPopper, History, Settings, RotateCcw, LogOut, FileUp, FileDown, Users, Copy, Paperclip, Loader2, Archive, Layers,
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -173,6 +173,13 @@ function normalizeDesc(d) {
 
 // Monta um "aprendizado" a partir do que o usuário já categorizou antes:
 // para cada padrão de descrição, qual categoria ele mais usou.
+// Identifica um lançamento por data + valor + início da descrição,
+// para reconhecer se um extrato já foi importado antes.
+function chaveDuplicata(t) {
+  const desc = String(t.description || "").toLowerCase().trim().slice(0, 25);
+  return `${t.date}|${Number(t.amount).toFixed(2)}|${desc}`;
+}
+
 function buildCategoryMemory(transactions) {
   const contagem = {};
   transactions
@@ -454,6 +461,8 @@ export default function App() {
   const [typeFilter, setTypeFilter] = useState("todos");
   const [categoryFilter, setCategoryFilter] = useState("todas");
   const [accountFilter, setAccountFilter] = useState("todas");
+  const [sortBy, setSortBy] = useState("data-desc");
+  const [selecionados, setSelecionados] = useState([]);
   const [periodMode, setPeriodMode] = useState("mes");
   const [refDate, setRefDate] = useState(new Date());
 
@@ -819,6 +828,8 @@ export default function App() {
 
   const categoryMemory = useMemo(() => buildCategoryMemory(transactions), [transactions]);
 
+  const chavesExistentes = useMemo(() => new Set(transactions.map(chaveDuplicata)), [transactions]);
+
   const periodFiltered = useMemo(() => {
     if (periodMode === "todos") return transactions;
     const y = refDate.getFullYear(), m = refDate.getMonth();
@@ -829,15 +840,44 @@ export default function App() {
   }, [transactions, periodMode, refDate]);
 
   const visibleTransactions = useMemo(() => {
-    return periodFiltered
-      .filter((t) => (typeFilter === "todos" ? true : t.type === typeFilter))
-      .filter((t) => (categoryFilter === "todas" ? true : t.category === categoryFilter))
-      .filter((t) => (accountFilter === "todas" ? true : (accountFilter === "sem" ? !t.account : t.account === accountFilter)))
-      .filter((t) => t.description.toLowerCase().includes(search.toLowerCase()))
-      .sort((a, b) => (a.date < b.date ? 1 : -1));
-  }, [periodFiltered, typeFilter, categoryFilter, accountFilter, search]);
+    // A busca aceita texto (descrição) ou número (valor).
+    const termo = search.trim().toLowerCase();
+    const comoNumero = parseFloat(termo.replace(".", "").replace(",", "."));
+    const buscaNumerica = termo !== "" && !isNaN(comoNumero);
 
+    const casaBusca = (t) => {
+      if (termo === "") return true;
+      if (t.description.toLowerCase().includes(termo)) return true;
+      if (buscaNumerica) {
+        const v = Number(t.amount);
+        return Math.abs(v - comoNumero) < 0.005 || String(v.toFixed(2)).includes(termo.replace(",", "."));
+      }
+      return false;
+    };
+
+    const lista = periodFiltered
+      .filter((t) => (typeFilter === "todos" ? true : t.type === typeFilter))
+      .filter((t) => (typeFilter === "transferencia" || categoryFilter === "todas" ? true : t.category === categoryFilter))
+      .filter((t) => (accountFilter === "todas" ? true : (accountFilter === "sem" ? !t.account : t.account === accountFilter)))
+      .filter(casaBusca);
+
+    const ordenadores = {
+      "data-desc": (a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0),
+      "data-asc": (a, b) => (a.date > b.date ? 1 : a.date < b.date ? -1 : 0),
+      "valor-desc": (a, b) => b.amount - a.amount,
+      "valor-asc": (a, b) => a.amount - b.amount,
+    };
+    return [...lista].sort(ordenadores[sortBy] || ordenadores["data-desc"]);
+  }, [periodFiltered, typeFilter, categoryFilter, accountFilter, search, sortBy]);
+
+  // Os cards refletem exatamente o que está sendo exibido na lista
   const totals = useMemo(() => {
+    const receitas = visibleTransactions.filter((t) => t.type === "receita").reduce((s, t) => s + Number(t.amount), 0);
+    const despesas = visibleTransactions.filter((t) => t.type === "despesa").reduce((s, t) => s + Number(t.amount), 0);
+    return { receitas, despesas, saldo: receitas - despesas };
+  }, [visibleTransactions]);
+
+  const totalsPeriodo = useMemo(() => {
     const receitas = periodFiltered.filter((t) => t.type === "receita").reduce((s, t) => s + Number(t.amount), 0);
     const despesas = periodFiltered.filter((t) => t.type === "despesa").reduce((s, t) => s + Number(t.amount), 0);
     return { receitas, despesas, saldo: receitas - despesas };
@@ -1117,6 +1157,51 @@ export default function App() {
     setDebts((prev) => prev.map((x) => (x.id === d.id ? { ...x, settled: !x.settled, paid: !x.settled ? x.amount : x.paid } : x)));
   };
 
+  const handleDeleteInstallmentGroup = (t) => {
+    if (!t.installmentGroupId) return;
+    const doGrupo = transactions.filter((x) => x.installmentGroupId === t.installmentGroupId);
+    if (!window.confirm(`Excluir todas as ${doGrupo.length} parcelas de "${t.description.replace(/ \(\d+\/\d+\)$/, "")}"?`)) return;
+    setTransactions((prev) => prev.filter((x) => x.installmentGroupId !== t.installmentGroupId));
+    setToast({ message: `${doGrupo.length} parcelas excluídas.` });
+  };
+
+  const handleBulkDelete = () => {
+    if (selecionados.length === 0) return;
+    if (!window.confirm(`Excluir ${selecionados.length} lançamento${selecionados.length !== 1 ? "s" : ""}?`)) return;
+    const ids = new Set(selecionados);
+    setTransactions((prev) => prev.filter((t) => !ids.has(t.id)));
+    setSelecionados([]);
+    setToast({ message: `${ids.size} lançamento${ids.size !== 1 ? "s" : ""} excluído${ids.size !== 1 ? "s" : ""}.` });
+  };
+
+  const handleBulkCategory = (categoriaId) => {
+    if (selecionados.length === 0 || !categoriaId) return;
+    const ids = new Set(selecionados);
+    setTransactions((prev) => prev.map((t) => (ids.has(t.id) && t.type !== "transferencia" ? { ...t, category: categoriaId } : t)));
+    setSelecionados([]);
+    setToast({ message: `Categoria aplicada a ${ids.size} lançamento${ids.size !== 1 ? "s" : ""}.` });
+  };
+
+  const handleBulkAccount = (contaId) => {
+    if (selecionados.length === 0) return;
+    const ids = new Set(selecionados);
+    setTransactions((prev) => prev.map((t) => (ids.has(t.id) ? { ...t, account: contaId } : t)));
+    setSelecionados([]);
+    setToast({ message: `Conta aplicada a ${ids.size} lançamento${ids.size !== 1 ? "s" : ""}.` });
+  };
+
+  const handleBulkPaid = (novoStatus) => {
+    if (selecionados.length === 0) return;
+    const ids = new Set(selecionados);
+    setTransactions((prev) => prev.map((t) => (ids.has(t.id) ? { ...t, status: novoStatus } : t)));
+    setSelecionados([]);
+    setToast({ message: `${ids.size} lançamento${ids.size !== 1 ? "s" : ""} atualizado${ids.size !== 1 ? "s" : ""}.` });
+  };
+
+  const toggleSelecionado = (id) => {
+    setSelecionados((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
   const handleTogglePaid = (t) => {
     setTransactions((prev) => prev.map((x) => (x.id === t.id ? { ...x, status: x.status === "pago" ? "pendente" : "pago" } : x)));
   };
@@ -1130,6 +1215,8 @@ export default function App() {
     if (toast?.item) setTransactions((prev) => [...prev, toast.item]);
     setToast(null);
   };
+
+  const irParaHoje = () => setRefDate(new Date());
 
   const shiftMonth = (delta) => {
     setRefDate((d) => new Date(d.getFullYear(), d.getMonth() + delta, 1));
@@ -1580,7 +1667,7 @@ export default function App() {
           <VisaoGeralTab
             transactions={transactions}
             periodFiltered={periodFiltered}
-            totals={totals}
+            totals={totalsPeriodo}
             refDate={refDate}
             periodMode={periodMode}
             shiftMonth={shiftMonth}
@@ -1746,7 +1833,7 @@ export default function App() {
               </div>
             )}
 
-            <PeriodNavigator periodMode={periodMode} refDate={refDate} shiftMonth={shiftMonth} setPeriodMode={setPeriodMode} />
+            <PeriodNavigator periodMode={periodMode} refDate={refDate} shiftMonth={shiftMonth} setPeriodMode={setPeriodMode} onHoje={irParaHoje} />
 
             {/* Summary cards */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
@@ -1762,7 +1849,7 @@ export default function App() {
                 <input
                   className="flex-1 outline-none text-sm min-w-0"
                   style={{ background: "transparent", color: "var(--ink)" }}
-                  placeholder="Buscar por descrição…"
+                  placeholder="Buscar por descrição ou valor…"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                 />
@@ -1773,19 +1860,36 @@ export default function App() {
                 <option value="despesa">Despesas</option>
                 <option value="transferencia">Transferências</option>
               </select>
-              <select className="rz-input text-sm sm:w-auto" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
-                <option value="todas">Todas as categorias</option>
-                {(typeFilter === "todos" || typeFilter === "transferencia"
+              <select
+                className="rz-input text-sm sm:w-auto disabled:opacity-40"
+                value={categoryFilter}
+                disabled={typeFilter === "transferencia"}
+                title={typeFilter === "transferencia" ? "Transferências não têm categoria" : undefined}
+                onChange={(e) => setCategoryFilter(e.target.value)}
+              >
+                <option value="todas">{typeFilter === "transferencia" ? "Sem categoria" : "Todas as categorias"}</option>
+                {typeFilter !== "transferencia" && (typeFilter === "todos"
                   ? [...categoriesByType.receita, ...categoriesByType.despesa]
                   : categoriesByType[typeFilter]).map((c) => (
                   <option key={c.id} value={c.id}>{c.label}</option>
                 ))}
+              </select>
+              <select className="rz-input text-sm sm:w-auto" value={sortBy} onChange={(e) => setSortBy(e.target.value)} title="Ordenar a lista">
+                <option value="data-desc">Mais recentes primeiro</option>
+                <option value="data-asc">Mais antigos primeiro</option>
+                <option value="valor-desc">Maior valor primeiro</option>
+                <option value="valor-asc">Menor valor primeiro</option>
               </select>
               <select className="rz-input text-sm sm:w-auto" value={accountFilter} onChange={(e) => setAccountFilter(e.target.value)}>
                 <option value="todas">Todas as contas</option>
                 <option value="sem">Sem conta definida</option>
                 {banksList.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
               </select>
+            </div>
+
+            <div className="text-xs mb-2" style={{ color: "var(--ink-soft)" }}>
+              {visibleTransactions.length} lançamento{visibleTransactions.length !== 1 ? "s" : ""}
+              {visibleTransactions.length !== periodFiltered.length && ` de ${periodFiltered.length} no período`}
             </div>
 
             {/* Ações */}
@@ -1805,6 +1909,25 @@ export default function App() {
               </button>
             </div>
 
+            {selecionados.length > 0 && (
+              <div className="rz-card p-3 mb-4 flex items-center gap-2 flex-wrap" style={{ borderColor: "var(--emerald)" }}>
+                <span className="text-sm font-medium">{selecionados.length} selecionado{selecionados.length !== 1 ? "s" : ""}</span>
+                <select className="rz-input rz-focus text-xs" style={{ width: "auto" }} value="" onChange={(e) => handleBulkCategory(e.target.value)}>
+                  <option value="">Mudar categoria…</option>
+                  {[...categoriesByType.receita, ...categoriesByType.despesa].map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+                </select>
+                <select className="rz-input rz-focus text-xs" style={{ width: "auto" }} value="" onChange={(e) => handleBulkAccount(e.target.value)}>
+                  <option value="">Mudar conta…</option>
+                  <option value="">Nenhuma</option>
+                  {banksList.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
+                </select>
+                <button onClick={() => handleBulkPaid("pago")} className="rz-btn-ghost rz-focus text-xs !py-1.5 !px-3">Marcar pago</button>
+                <button onClick={() => handleBulkPaid("pendente")} className="rz-btn-ghost rz-focus text-xs !py-1.5 !px-3">Marcar pendente</button>
+                <button onClick={handleBulkDelete} className="rz-btn-ghost rz-focus text-xs !py-1.5 !px-3" style={{ color: "var(--brick)", borderColor: "var(--brick)" }}>Excluir</button>
+                <button onClick={() => setSelecionados([])} className="rz-focus text-xs ml-auto" style={{ color: "var(--ink-soft)" }}>Limpar seleção</button>
+              </div>
+            )}
+
             {visibleTransactions.filter((t) => t.status === "pendente").length > 0 && (
               <div className="rz-card p-3 mb-4 flex items-center justify-between gap-3 flex-wrap">
                 <p className="text-sm" style={{ color: "var(--ink-soft)" }}>
@@ -1823,6 +1946,7 @@ export default function App() {
                 onConfirm={handleConfirmCsvImport}
                 onCancel={() => setShowCsvImport(false)}
                 categoryMemory={categoryMemory}
+                chavesExistentes={chavesExistentes}
               />
             )}
 
@@ -1842,6 +1966,23 @@ export default function App() {
               </div>
             ) : (
               <div className="rz-card overflow-hidden">
+                <div className="flex items-center gap-2 px-4 py-2" style={{ background: "var(--paper-alt)" }}>
+                  <button
+                    onClick={() => setSelecionados(selecionados.length === visibleTransactions.length ? [] : visibleTransactions.map((t) => t.id))}
+                    className="rz-focus flex items-center gap-2 text-xs"
+                    style={{ color: "var(--ink-soft)" }}
+                    title="Selecionar todos os lançamentos visíveis"
+                  >
+                    <span style={{
+                      width: 14, height: 14, borderRadius: 3, border: "1.5px solid var(--line)",
+                      background: selecionados.length === visibleTransactions.length && visibleTransactions.length > 0 ? "var(--ink)" : "var(--surface)",
+                      display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                    }}>
+                      {selecionados.length === visibleTransactions.length && visibleTransactions.length > 0 && <Check size={10} color="var(--paper)" />}
+                    </span>
+                    Selecionar todos
+                  </button>
+                </div>
                 {visibleTransactions.map((t, i) => {
                   const ehTransf = t.type === "transferencia";
                   const cat = ehTransf ? { label: "Transferência", color: "var(--ink-soft)" } : findCategory(t.type, t.category);
@@ -1851,6 +1992,26 @@ export default function App() {
                     ? `${bank ? bank.label : "?"} → ${bankTo ? bankTo.label : "?"}`
                     : `${cat.label}${bank ? ` · ${bank.label}` : ""}`;
                   const corValor = ehTransf ? "var(--ink-soft)" : (t.type === "receita" ? "var(--emerald)" : "var(--brick)");
+                  const selecionado = selecionados.includes(t.id);
+                  const checkbox = (
+                    <button
+                      onClick={() => toggleSelecionado(t.id)}
+                      className="rz-focus shrink-0"
+                      aria-label="Selecionar lançamento" title="Selecionar"
+                      style={{
+                        width: 15, height: 15, borderRadius: 3, border: "1.5px solid var(--line)",
+                        background: selecionado ? "var(--ink)" : "var(--surface)",
+                        display: "inline-flex", alignItems: "center", justifyContent: "center",
+                      }}
+                    >
+                      {selecionado && <Check size={11} color="var(--paper)" />}
+                    </button>
+                  );
+                  const parcelaTag = t.installmentTotal ? (
+                    <span className="rz-mono text-[9px] px-1.5 py-0.5 rounded shrink-0" style={{ background: "var(--paper-alt)", color: "var(--ink-soft)" }}>
+                      {t.installmentIndex}/{t.installmentTotal}
+                    </span>
+                  ) : null;
                   const sinalValor = ehTransf ? "" : (t.type === "receita" ? "+ " : "− ");
                   const statusBtn = (
                     <button
@@ -1889,12 +2050,17 @@ export default function App() {
                       <button onClick={() => handleDuplicate(t)} className="rz-focus p-1.5 rounded-md" aria-label="Duplicar" title="Duplicar lançamento" style={{ color: "var(--ink-soft)" }}>
                         <Copy size={15} />
                       </button>
-                      <button onClick={() => openEditForm(t)} className="rz-focus p-1.5 rounded-md" aria-label="Editar" style={{ color: "var(--ink-soft)" }}>
+                      <button onClick={() => openEditForm(t)} className="rz-focus p-1.5 rounded-md" aria-label="Editar" title="Editar lançamento" style={{ color: "var(--ink-soft)" }}>
                         <Pencil size={15} />
                       </button>
-                      <button onClick={() => handleDelete(t)} className="rz-focus p-1.5 rounded-md" aria-label="Excluir" style={{ color: "var(--ink-soft)" }}>
+                      <button onClick={() => handleDelete(t)} className="rz-focus p-1.5 rounded-md" aria-label="Excluir" title={t.installmentTotal ? "Excluir só esta parcela" : "Excluir"} style={{ color: "var(--ink-soft)" }}>
                         <Trash2 size={15} />
                       </button>
+                      {t.installmentGroupId && (
+                        <button onClick={() => handleDeleteInstallmentGroup(t)} className="rz-focus p-1.5 rounded-md" aria-label="Excluir todas as parcelas" title={`Excluir todas as ${t.installmentTotal} parcelas`} style={{ color: "var(--brick)" }}>
+                          <Layers size={15} />
+                        </button>
+                      )}
                     </div>
                   );
 
@@ -1903,9 +2069,13 @@ export default function App() {
                       {/* Mobile layout */}
                       <div className="flex flex-col gap-2 px-4 py-3 sm:hidden">
                         <div className="flex items-center gap-2 min-w-0">
+                          {checkbox}
                           <span className="rz-dot" style={{ background: cat.color }} />
                           <div className="min-w-0 flex-1">
-                            <div className="text-sm font-medium truncate">{t.description}</div>
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className="text-sm font-medium truncate">{t.installmentTotal ? t.description.replace(/ \(\d+\/\d+\)$/, "") : t.description}</span>
+                              {parcelaTag}
+                            </div>
                             <div className="text-xs" style={{ color: "var(--ink-soft)" }}>{subtitulo}</div>
                           </div>
                         </div>
@@ -1929,10 +2099,14 @@ export default function App() {
 
                       {/* Desktop layout */}
                       <div className="hidden sm:flex sm:items-center gap-4 px-4 py-3">
+                        {checkbox}
                         <div className="flex items-center gap-2 flex-1 min-w-0">
                           <span className="rz-dot" style={{ background: cat.color }} />
                           <div className="min-w-0">
-                            <div className="text-sm font-medium truncate">{t.description}</div>
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className="text-sm font-medium truncate">{t.installmentTotal ? t.description.replace(/ \(\d+\/\d+\)$/, "") : t.description}</span>
+                              {parcelaTag}
+                            </div>
                             <div className="text-xs" style={{ color: "var(--ink-soft)" }}>{subtitulo}</div>
                           </div>
                         </div>
@@ -2236,7 +2410,9 @@ function SummaryCard({ label, value, icon: Icon, tone }) {
   );
 }
 
-function PeriodNavigator({ periodMode, refDate, shiftMonth, setPeriodMode, hideToggle }) {
+function PeriodNavigator({ periodMode, refDate, shiftMonth, setPeriodMode, hideToggle, onHoje }) {
+  const agora = new Date();
+  const ehMesAtual = refDate.getFullYear() === agora.getFullYear() && refDate.getMonth() === agora.getMonth();
   return (
     <div className="flex flex-wrap items-center gap-3 mb-5">
       <div className="rz-card flex items-center gap-1 px-1 py-1">
@@ -2250,6 +2426,11 @@ function PeriodNavigator({ periodMode, refDate, shiftMonth, setPeriodMode, hideT
           <ChevronRight size={16} />
         </button>
       </div>
+      {onHoje && periodMode === "mes" && !ehMesAtual && (
+        <button onClick={onHoje} className="rz-btn-ghost rz-focus text-xs !py-2" title="Voltar para o mês atual">
+          Hoje
+        </button>
+      )}
       {!hideToggle && (
         <button
           onClick={() => setPeriodMode((m) => (m === "mes" ? "todos" : "mes"))}
@@ -3810,7 +3991,7 @@ function RetroLinha({ rotulo, valor, cor }) {
   );
 }
 
-function CsvImportModal({ categoriesByType, banksList, onConfirm, onCancel, categoryMemory }) {
+function CsvImportModal({ categoriesByType, banksList, onConfirm, onCancel, categoryMemory, chavesExistentes }) {
   const [rows, setRows] = useState([]);
   const [error, setError] = useState("");
   const [fileName, setFileName] = useState("");
@@ -3832,7 +4013,8 @@ function CsvImportModal({ categoriesByType, banksList, onConfirm, onCancel, cate
         setRows(parsedRows.map((r) => {
           const lembrete = categoryMemory[normalizeDesc(r.description)];
           const sugerida = lembrete && lembrete.tipo === r.type ? lembrete.catId : "";
-          return { ...r, category: sugerida, sugerida: !!sugerida };
+          const duplicado = r.valid && chavesExistentes && chavesExistentes.has(chaveDuplicata(r));
+          return { ...r, category: sugerida, sugerida: !!sugerida, duplicado, ignorar: duplicado };
         }));
       },
       error: () => setError("Não foi possível ler o arquivo."),
@@ -3852,18 +4034,23 @@ function CsvImportModal({ categoriesByType, banksList, onConfirm, onCancel, cate
   };
 
   const validRows = rows.filter((r) => r.valid);
+  const paraImportar = validRows.filter((r) => !r.ignorar);
+  const duplicados = validRows.filter((r) => r.duplicado).length;
   const invalidCount = rows.length - validRows.length;
-  const semCategoria = validRows.filter((r) => !r.category).length;
+  const semCategoria = paraImportar.filter((r) => !r.category).length;
   const reconhecidos = validRows.filter((r) => r.sugerida).length;
-  const hasDespesas = validRows.some((r) => r.type === "despesa");
-  const hasReceitas = validRows.some((r) => r.type === "receita");
+  const hasDespesas = paraImportar.some((r) => r.type === "despesa");
+  const hasReceitas = paraImportar.some((r) => r.type === "receita");
+
+  const toggleIgnorar = (idx) => setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, ignorar: !r.ignorar } : r)));
 
   const handleConfirm = () => {
+    if (paraImportar.length === 0) { setError("Nenhuma linha marcada para importar."); return; }
     if (semCategoria > 0) {
       setError(`${semCategoria} lançamento${semCategoria !== 1 ? "s" : ""} sem categoria. Defina uma categoria padrão e clique em "Aplicar aos vazios", ou escolha uma a uma.`);
       return;
     }
-    onConfirm(validRows, account, status);
+    onConfirm(paraImportar, account, status);
   };
 
   return (
@@ -3885,13 +4072,19 @@ function CsvImportModal({ categoriesByType, banksList, onConfirm, onCancel, cate
         ) : (
           <>
             <p className="text-xs mb-1" style={{ color: "var(--ink-soft)" }}>
-              {fileName} — {validRows.length} lançamento{validRows.length !== 1 ? "s" : ""} prontos
+              {fileName} — {paraImportar.length} lançamento{paraImportar.length !== 1 ? "s" : ""} prontos
               {invalidCount > 0 ? `, ${invalidCount} ignorado${invalidCount !== 1 ? "s" : ""} (dados incompletos)` : ""}.
             </p>
             {reconhecidos > 0 && (
-              <p className="text-xs mb-3" style={{ color: "var(--emerald)" }}>
+              <p className="text-xs mb-1" style={{ color: "var(--emerald)" }}>
                 {reconhecidos} categorizado{reconhecidos !== 1 ? "s" : ""} automaticamente com base no seu histórico.
               </p>
+            )}
+            {duplicados > 0 && (
+              <div className="text-xs mb-3 px-3 py-2 rounded-lg" style={{ background: "var(--gold-soft)", color: "var(--gold)" }}>
+                <strong>{duplicados} lançamento{duplicados !== 1 ? "s" : ""} já existe{duplicados !== 1 ? "m" : ""}</strong> no sistema (mesma data, valor e descrição).
+                Eles vêm desmarcados para não duplicar — se quiser importar mesmo assim, marque a caixinha na linha.
+              </div>
             )}
 
             <div className="flex flex-col sm:flex-row gap-3 mb-2">
@@ -3942,8 +4135,23 @@ function CsvImportModal({ categoriesByType, banksList, onConfirm, onCancel, cate
               {validRows.map((r, i) => {
                 const idxReal = rows.indexOf(r);
                 return (
-                  <div key={i} className="flex flex-col sm:flex-row sm:items-center gap-2 px-3 py-2" style={{ borderTop: i === 0 ? "none" : "1px solid var(--line)" }}>
+                  <div key={i} className="flex flex-col sm:flex-row sm:items-center gap-2 px-3 py-2" style={{ borderTop: i === 0 ? "none" : "1px solid var(--line)", opacity: r.ignorar ? 0.45 : 1 }}>
                     <div className="flex items-center gap-2 flex-1 min-w-0">
+                      <button
+                        onClick={() => toggleIgnorar(idxReal)}
+                        className="rz-focus shrink-0"
+                        title={r.ignorar ? "Marcar para importar" : "Não importar esta linha"}
+                        style={{
+                          width: 14, height: 14, borderRadius: 3, border: "1.5px solid var(--line)",
+                          background: r.ignorar ? "var(--surface)" : "var(--ink)",
+                          display: "inline-flex", alignItems: "center", justifyContent: "center",
+                        }}
+                      >
+                        {!r.ignorar && <Check size={10} color="var(--paper)" />}
+                      </button>
+                      {r.duplicado && (
+                        <span className="rz-mono text-[9px] px-1 py-0.5 rounded shrink-0" style={{ background: "var(--gold-soft)", color: "var(--gold)" }}>JÁ EXISTE</span>
+                      )}
                       <span className="rz-mono text-[11px] shrink-0" style={{ color: "var(--ink-soft)" }}>{formatDateBR(r.date)}</span>
                       <span className="text-xs flex-1 truncate">{r.description}</span>
                       <span className="rz-mono text-xs font-semibold whitespace-nowrap shrink-0" style={{ color: r.type === "receita" ? "var(--emerald)" : "var(--brick)" }}>
@@ -3969,7 +4177,7 @@ function CsvImportModal({ categoriesByType, banksList, onConfirm, onCancel, cate
             <div className="flex gap-2">
               <button onClick={onCancel} className="rz-btn-ghost rz-focus flex-1 text-sm">Cancelar</button>
               <button onClick={handleConfirm} className="rz-btn-primary rz-focus flex-1 text-sm flex items-center justify-center gap-2">
-                <Check size={16} /> Importar {validRows.length} lançamento{validRows.length !== 1 ? "s" : ""}
+                <Check size={16} /> Importar {paraImportar.length} lançamento{paraImportar.length !== 1 ? "s" : ""}
               </button>
             </div>
           </>
@@ -5083,7 +5291,7 @@ function VisaoGeralTab({ transactions, periodFiltered, totals, refDate, periodMo
         </div>
       ) : (
         <>
-          <PeriodNavigator periodMode={periodMode} refDate={refDate} shiftMonth={shiftMonth} setPeriodMode={setPeriodMode} />
+          <PeriodNavigator periodMode={periodMode} refDate={refDate} shiftMonth={shiftMonth} setPeriodMode={setPeriodMode} onHoje={irParaHoje} />
 
           {/* Situação atual */}
           <div className="mb-5">
