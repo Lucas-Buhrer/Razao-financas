@@ -202,8 +202,8 @@ function addMonthsToDateISO(dateISO, months) {
   return dateToISO(target);
 }
 const emptyFixedForm = { description: "", amount: "", type: "despesa", category: "", account: "", dueDay: "5" };
-const emptyGoalForm = { title: "", targetAmount: "", deadline: "", color: COLOR_PALETTE[0] };
-const emptyDebtForm = { person: "", amount: "", direction: "emprestei", date: todayISO(), dueDate: "", notes: "" };
+const emptyGoalForm = { title: "", targetAmount: "", deadline: "", color: COLOR_PALETTE[0], linkedSavingsId: "" };
+const emptyDebtForm = { person: "", amount: "", direction: "emprestei", date: todayISO(), dueDate: "", notes: "", interestRate: "" };
 
 const DEFAULT_THEME = { paper: "#eef1e7", ink: "#1e2b23", emerald: "#1b5e4f", brick: "#a83b2e", gold: "#b8873a" };
 const THEME_PRESETS = [
@@ -949,7 +949,7 @@ export default function App() {
   const resetDebtForm = () => { setDebtForm(emptyDebtForm); setEditingDebtId(null); setDebtError(""); };
   const openNewDebtForm = () => { resetDebtForm(); setShowDebtForm(true); };
   const openEditDebtForm = (d) => {
-    setDebtForm({ person: d.person, amount: String(d.amount), direction: d.direction, date: d.date, dueDate: d.dueDate || "", notes: d.notes || "" });
+    setDebtForm({ person: d.person, amount: String(d.amount), direction: d.direction, date: d.date, dueDate: d.dueDate || "", notes: d.notes || "", interestRate: d.interestRate ? String(d.interestRate) : "" });
     setEditingDebtId(d.id);
     setShowDebtForm(true);
   };
@@ -958,10 +958,11 @@ export default function App() {
     const valor = parseFloat(String(debtForm.amount).replace(",", "."));
     if (!debtForm.person.trim()) { setDebtError("Informe a pessoa ou instituição."); return; }
     if (!valor || valor <= 0) { setDebtError("Informe um valor maior que zero."); return; }
+    const juros = parseFloat(String(debtForm.interestRate).replace(",", ".")) || 0;
     if (editingDebtId) {
-      setDebts((prev) => prev.map((d) => (d.id === editingDebtId ? { ...d, ...debtForm, person: debtForm.person.trim(), amount: valor } : d)));
+      setDebts((prev) => prev.map((d) => (d.id === editingDebtId ? { ...d, ...debtForm, person: debtForm.person.trim(), amount: valor, interestRate: juros } : d)));
     } else {
-      setDebts((prev) => [...prev, { id: uid(), ...debtForm, person: debtForm.person.trim(), amount: valor, paid: 0, settled: false, createdBy: currentUserEmail }]);
+      setDebts((prev) => [...prev, { id: uid(), ...debtForm, person: debtForm.person.trim(), amount: valor, interestRate: juros, paid: 0, settled: false, createdBy: currentUserEmail }]);
     }
     setShowDebtForm(false);
     resetDebtForm();
@@ -969,12 +970,27 @@ export default function App() {
 
   const handleDeleteDebt = (d) => setDebts((prev) => prev.filter((x) => x.id !== d.id));
 
-  const handleDebtPayment = (debtId, valor) => {
+  const handleDebtPayment = (debtId, valor, gerarLancamento, categoria, conta) => {
+    const divida = debts.find((d) => d.id === debtId);
     setDebts((prev) => prev.map((d) => {
       if (d.id !== debtId) return d;
       const novoPago = Math.max(0, Math.min(d.amount, (d.paid || 0) + valor));
       return { ...d, paid: novoPago, settled: novoPago >= d.amount };
     }));
+
+    // Quem emprestou recebe de volta (receita); quem devia, paga (despesa).
+    if (gerarLancamento && divida && categoria) {
+      const ehRecebimento = divida.direction === "emprestei";
+      setTransactions((prev) => [...prev, {
+        id: uid(),
+        description: ehRecebimento ? `Recebido de ${divida.person}` : `Pago a ${divida.person}`,
+        amount: valor, date: todayISO(),
+        type: ehRecebimento ? "receita" : "despesa",
+        category: categoria, account: conta || "", status: "pago",
+        debtId, createdBy: currentUserEmail,
+      }]);
+      setToast({ message: "Acerto registrado e lançado na sua conta." });
+    }
   };
 
   const handleToggleSettled = (d) => {
@@ -1259,6 +1275,10 @@ export default function App() {
     setBudgets((prev) => prev.map((b) => (b.id === budgetId ? { ...b, limit: newLimit } : b)));
   };
 
+  const handleToggleRollover = (budgetId) => {
+    setBudgets((prev) => prev.map((b) => (b.id === budgetId ? { ...b, rollover: !b.rollover } : b)));
+  };
+
   const handleDeleteBudget = (budget) => {
     setBudgets((prev) => prev.filter((b) => b.id !== budget.id));
   };
@@ -1266,7 +1286,7 @@ export default function App() {
   const resetGoalForm = () => { setGoalForm(emptyGoalForm); setEditingGoalId(null); setGoalError(""); };
   const openNewGoalForm = () => { resetGoalForm(); setShowGoalForm(true); };
   const openEditGoalForm = (goal) => {
-    setGoalForm({ title: goal.title, targetAmount: String(goal.targetAmount), deadline: goal.deadline || "", color: goal.color });
+    setGoalForm({ title: goal.title, targetAmount: String(goal.targetAmount), deadline: goal.deadline || "", color: goal.color, linkedSavingsId: goal.linkedSavingsId || "" });
     setEditingGoalId(goal.id);
     setShowGoalForm(true);
   };
@@ -1277,9 +1297,9 @@ export default function App() {
     if (!targetNum || targetNum <= 0) { setGoalError("Informe um valor alvo maior que zero."); return; }
 
     if (editingGoalId) {
-      setGoals((prev) => prev.map((g) => (g.id === editingGoalId ? { ...g, title: goalForm.title.trim(), targetAmount: targetNum, deadline: goalForm.deadline, color: goalForm.color } : g)));
+      setGoals((prev) => prev.map((g) => (g.id === editingGoalId ? { ...g, title: goalForm.title.trim(), targetAmount: targetNum, deadline: goalForm.deadline, color: goalForm.color, linkedSavingsId: goalForm.linkedSavingsId } : g)));
     } else {
-      setGoals((prev) => [...prev, { id: uid(), title: goalForm.title.trim(), targetAmount: targetNum, currentAmount: 0, deadline: goalForm.deadline, color: goalForm.color, history: [] }]);
+      setGoals((prev) => [...prev, { id: uid(), title: goalForm.title.trim(), targetAmount: targetNum, currentAmount: 0, deadline: goalForm.deadline, color: goalForm.color, linkedSavingsId: goalForm.linkedSavingsId, history: [] }]);
     }
     setShowGoalForm(false);
     resetGoalForm();
@@ -1399,6 +1419,8 @@ export default function App() {
             onCancelForm={() => { setShowDebtForm(false); resetDebtForm(); }}
             onPayment={handleDebtPayment}
             onToggleSettled={handleToggleSettled}
+            categoriesByType={categoriesByType}
+            banksList={banksList}
           />
         ) : activeTab === "carteira" ? (
           <CarteiraTab
@@ -1470,6 +1492,8 @@ export default function App() {
             onAdd={handleAddBudget}
             onUpdateLimit={handleUpdateBudgetLimit}
             onDelete={handleDeleteBudget}
+            onToggleRollover={handleToggleRollover}
+            transactions={transactions}
           />
         ) : activeTab === "metas" ? (
           <MetasTab
@@ -1487,6 +1511,8 @@ export default function App() {
             onCancelForm={() => { setShowGoalForm(false); resetGoalForm(); }}
             onContribute={handleContributeGoal}
             onDeleteHistoryEntry={handleDeleteGoalHistoryEntry}
+            savingsAccounts={savingsAccounts}
+            onContributeSavings={handleContributeSavings}
           />
         ) : activeTab === "fixas" ? (
           <FixedBillsTab
@@ -3015,17 +3041,66 @@ function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, s
   );
 }
 
-function OrcamentoTab({ budgets, periodFiltered, refDate, shiftMonth, categoriesByType, findCategory, budgetForm, setBudgetForm, budgetError, onAdd, onUpdateLimit, onDelete }) {
+function OrcamentoTab({ budgets, periodFiltered, refDate, shiftMonth, categoriesByType, findCategory, budgetForm, setBudgetForm, budgetError, onAdd, onUpdateLimit, onDelete, onToggleRollover, transactions }) {
   const spentByCategory = useMemo(() => {
     const map = {};
     periodFiltered.filter((t) => t.type === "despesa").forEach((t) => { map[t.category] = (map[t.category] || 0) + Number(t.amount); });
     return map;
   }, [periodFiltered]);
 
+  // Média histórica de gasto por categoria (últimos 6 meses antes do atual)
+  const mediaHistorica = useMemo(() => {
+    const map = {};
+    const meses = [];
+    for (let i = 1; i <= 6; i++) meses.push(new Date(refDate.getFullYear(), refDate.getMonth() - i, 1));
+    meses.forEach((d) => {
+      transactions.filter((t) => {
+        if (t.type !== "despesa") return false;
+        const td = new Date(t.date + "T00:00:00");
+        return td.getFullYear() === d.getFullYear() && td.getMonth() === d.getMonth();
+      }).forEach((t) => {
+        if (!map[t.category]) map[t.category] = { total: 0, meses: new Set() };
+        map[t.category].total += Number(t.amount);
+        map[t.category].meses.add(`${d.getFullYear()}-${d.getMonth()}`);
+      });
+    });
+    const out = {};
+    Object.entries(map).forEach(([cat, v]) => { out[cat] = v.total / Math.max(1, v.meses.size); });
+    return out;
+  }, [transactions, refDate]);
+
+  // Sobra acumulada de meses anteriores, para os orçamentos com crédito ligado
+  const creditoAcumulado = useMemo(() => {
+    const out = {};
+    budgets.filter((b) => b.rollover).forEach((b) => {
+      let credito = 0;
+      for (let i = 6; i >= 1; i--) {
+        const d = new Date(refDate.getFullYear(), refDate.getMonth() - i, 1);
+        const gastoMes = transactions.filter((t) => {
+          if (t.type !== "despesa" || t.category !== b.categoryId) return false;
+          const td = new Date(t.date + "T00:00:00");
+          return td.getFullYear() === d.getFullYear() && td.getMonth() === d.getMonth();
+        }).reduce((s, t) => s + Number(t.amount), 0);
+        if (gastoMes === 0) continue;
+        credito = Math.max(0, credito + b.limit - gastoMes);
+      }
+      out[b.id] = credito;
+    });
+    return out;
+  }, [budgets, transactions, refDate]);
+
   const availableCategories = categoriesByType.despesa.filter((c) => !budgets.some((b) => b.categoryId === c.id));
 
-  const totalLimit = budgets.reduce((s, b) => s + b.limit, 0);
+  const totalLimit = budgets.reduce((s, b) => s + b.limit + (creditoAcumulado[b.id] || 0), 0);
   const totalSpent = budgets.reduce((s, b) => s + (spentByCategory[b.categoryId] || 0), 0);
+
+  // Dias do mês, para calcular o ritmo de gasto
+  const hoje = new Date();
+  const mesAtual = hoje.getFullYear() === refDate.getFullYear() && hoje.getMonth() === refDate.getMonth();
+  const diasNoMes = new Date(refDate.getFullYear(), refDate.getMonth() + 1, 0).getDate();
+  const diaDeHoje = mesAtual ? hoje.getDate() : diasNoMes;
+
+  const sugestao = budgetForm.categoryId ? mediaHistorica[budgetForm.categoryId] : null;
 
   return (
     <div>
@@ -3038,8 +3113,8 @@ function OrcamentoTab({ budgets, periodFiltered, refDate, shiftMonth, categories
 
       {budgets.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
-          <SummaryCard label="Total orçado" value={totalLimit} icon={Target} tone="emerald" />
-          <SummaryCard label="Total gasto (categorias orçadas)" value={totalSpent} icon={TrendingDown} tone={totalSpent > totalLimit ? "brick" : "emerald"} />
+          <SummaryCard label="Total disponível para gastar" value={totalLimit} icon={Target} tone="emerald" />
+          <SummaryCard label="Total gasto" value={totalSpent} icon={TrendingDown} tone={totalSpent > totalLimit ? "brick" : "emerald"} />
         </div>
       )}
 
@@ -3056,6 +3131,18 @@ function OrcamentoTab({ budgets, periodFiltered, refDate, shiftMonth, categories
               <Plus size={16} /> Adicionar
             </button>
           </div>
+
+          {sugestao ? (
+            <button
+              onClick={() => setBudgetForm({ ...budgetForm, limit: sugestao.toFixed(2).replace(".", ",") })}
+              className="rz-btn-ghost rz-focus text-xs !py-1.5 !px-3 mt-3 inline-flex items-center gap-1.5"
+            >
+              <History size={13} /> Usar média histórica: {formatCurrency(sugestao)}/mês
+            </button>
+          ) : budgetForm.categoryId ? (
+            <p className="text-xs mt-3" style={{ color: "var(--ink-soft)" }}>Sem histórico suficiente nessa categoria para sugerir um limite.</p>
+          ) : null}
+
           {budgetError && <div className="text-xs mt-2" style={{ color: "var(--brick)" }}>{budgetError}</div>}
         </div>
       ) : budgets.length > 0 ? (
@@ -3071,7 +3158,19 @@ function OrcamentoTab({ budgets, periodFiltered, refDate, shiftMonth, categories
       ) : (
         <div className="grid sm:grid-cols-2 gap-3">
           {budgets.map((b) => (
-            <BudgetRow key={b.id} budget={b} spent={spentByCategory[b.categoryId] || 0} category={findCategory("despesa", b.categoryId)} onUpdateLimit={onUpdateLimit} onDelete={onDelete} />
+            <BudgetRow
+              key={b.id}
+              budget={b}
+              spent={spentByCategory[b.categoryId] || 0}
+              category={findCategory("despesa", b.categoryId)}
+              credito={creditoAcumulado[b.id] || 0}
+              onUpdateLimit={onUpdateLimit}
+              onDelete={onDelete}
+              onToggleRollover={onToggleRollover}
+              mesAtual={mesAtual}
+              diaDeHoje={diaDeHoje}
+              diasNoMes={diasNoMes}
+            />
           ))}
         </div>
       )}
@@ -3079,11 +3178,17 @@ function OrcamentoTab({ budgets, periodFiltered, refDate, shiftMonth, categories
   );
 }
 
-function BudgetRow({ budget, spent, category, onUpdateLimit, onDelete }) {
+function BudgetRow({ budget, spent, category, credito, onUpdateLimit, onDelete, onToggleRollover, mesAtual, diaDeHoje, diasNoMes }) {
   const [editing, setEditing] = useState(false);
   const [tempLimit, setTempLimit] = useState(String(budget.limit));
-  const pct = budget.limit > 0 ? (spent / budget.limit) * 100 : 0;
+
+  const limiteEfetivo = budget.limit + credito;
+  const pct = limiteEfetivo > 0 ? (spent / limiteEfetivo) * 100 : 0;
   const tone = pct < 70 ? { color: "var(--emerald)" } : pct <= 100 ? { color: "var(--gold)" } : { color: "var(--brick)" };
+
+  // Alerta de ritmo: projeta o gasto até o fim do mês mantendo o ritmo atual
+  const projecao = mesAtual && diaDeHoje > 2 && spent > 0 ? (spent / diaDeHoje) * diasNoMes : null;
+  const vaiEstourar = projecao !== null && projecao > limiteEfetivo && spent <= limiteEfetivo;
 
   const saveEdit = () => {
     const num = parseFloat(String(tempLimit).replace(",", "."));
@@ -3099,6 +3204,15 @@ function BudgetRow({ budget, spent, category, onUpdateLimit, onDelete }) {
         </div>
         {!editing && (
           <div className="flex items-center gap-1 shrink-0">
+            <button
+              onClick={() => onToggleRollover(budget.id)}
+              className="rz-focus p-1 rounded-md"
+              aria-label="Acumular sobra"
+              title={budget.rollover ? "Sobra acumula para o próximo mês (ligado)" : "Sobra acumula para o próximo mês (desligado)"}
+              style={{ color: budget.rollover ? "var(--emerald)" : "var(--line)" }}
+            >
+              <Repeat size={13} />
+            </button>
             <button onClick={() => { setTempLimit(String(budget.limit)); setEditing(true); }} className="rz-focus p-1 rounded-md" aria-label="Editar limite" style={{ color: "var(--ink-soft)" }}>
               <Pencil size={13} />
             </button>
@@ -3118,21 +3232,33 @@ function BudgetRow({ budget, spent, category, onUpdateLimit, onDelete }) {
       ) : (
         <div className="flex items-baseline justify-between mb-2">
           <span className="rz-mono text-sm font-semibold" style={{ color: tone.color }}>{formatCurrency(spent)}</span>
-          <span className="rz-mono text-xs" style={{ color: "var(--ink-soft)" }}>de {formatCurrency(budget.limit)}</span>
+          <span className="rz-mono text-xs" style={{ color: "var(--ink-soft)" }}>
+            de {formatCurrency(limiteEfetivo)}
+            {credito > 0 && <span style={{ color: "var(--emerald)" }}> (+{formatCurrency(credito)})</span>}
+          </span>
         </div>
       )}
 
       <div className="rz-progress-track">
         <div className="rz-progress-fill" style={{ width: `${Math.min(pct, 100)}%`, background: tone.color }} />
       </div>
-      <div className="text-right mt-1">
+      <div className="flex items-center justify-between mt-1 gap-2">
+        {credito > 0 ? (
+          <span className="rz-mono text-[11px]" style={{ color: "var(--emerald)" }}>sobra acumulada</span>
+        ) : <span />}
         <span className="rz-mono text-[11px]" style={{ color: tone.color }}>{pct.toFixed(0)}%{pct > 100 ? " · acima do limite" : ""}</span>
       </div>
+
+      {vaiEstourar && (
+        <div className="text-xs mt-2 px-3 py-2 rounded-lg" style={{ background: "var(--gold-soft)", color: "var(--gold)" }}>
+          Nesse ritmo, fecha o mês em <strong>{formatCurrency(projecao)}</strong> — {formatCurrency(projecao - limiteEfetivo)} acima do limite.
+        </div>
+      )}
     </div>
   );
 }
 
-function MetasTab({ goals, goalForm, setGoalForm, showGoalForm, editingGoalId, goalError, onOpenNew, onOpenEdit, onSubmit, onDelete, onCancelForm, onContribute, onDeleteHistoryEntry }) {
+function MetasTab({ goals, goalForm, setGoalForm, showGoalForm, editingGoalId, goalError, onOpenNew, onOpenEdit, onSubmit, onDelete, onCancelForm, onContribute, onDeleteHistoryEntry, savingsAccounts, onContributeSavings }) {
   return (
     <div>
       <header className="mb-6 flex items-start justify-between gap-4 flex-wrap">
@@ -3156,7 +3282,7 @@ function MetasTab({ goals, goalForm, setGoalForm, showGoalForm, editingGoalId, g
         </div>
       ) : (
         <div className="grid sm:grid-cols-2 gap-4">
-          {goals.map((g) => <GoalCard key={g.id} goal={g} onEdit={onOpenEdit} onDelete={onDelete} onContribute={onContribute} onDeleteHistoryEntry={onDeleteHistoryEntry} />)}
+          {goals.map((g) => <GoalCard key={g.id} goal={g} onEdit={onOpenEdit} onDelete={onDelete} onContribute={onContribute} onDeleteHistoryEntry={onDeleteHistoryEntry} savingsAccounts={savingsAccounts} onContributeSavings={onContributeSavings} />)}
         </div>
       )}
 
@@ -3182,6 +3308,17 @@ function MetasTab({ goals, goalForm, setGoalForm, showGoalForm, editingGoalId, g
                   <input type="date" className="rz-input rz-focus rz-mono" value={goalForm.deadline} onChange={(e) => setGoalForm({ ...goalForm, deadline: e.target.value })} />
                 </div>
               </div>
+              <div>
+                <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Vincular a uma poupança (opcional)</label>
+                <select className="rz-input rz-focus" value={goalForm.linkedSavingsId} onChange={(e) => setGoalForm({ ...goalForm, linkedSavingsId: e.target.value })}>
+                  <option value="">Controlar valor separadamente</option>
+                  {(savingsAccounts || []).map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
+                </select>
+                <p className="text-xs mt-1" style={{ color: "var(--ink-soft)" }}>
+                  Ao vincular, o progresso da meta passa a ler o saldo dessa poupança — sem precisar lançar o valor duas vezes.
+                </p>
+              </div>
+
               <div className="flex flex-wrap gap-2">
                 {COLOR_PALETTE.map((color) => (
                   <button key={color} onClick={() => setGoalForm({ ...goalForm, color })} className="rz-focus w-6 h-6 rounded-full" style={{ background: color, boxShadow: goalForm.color === color ? "0 0 0 2px var(--surface), 0 0 0 4px var(--ink)" : "none" }} aria-label={`Cor ${color}`} />
@@ -3200,16 +3337,27 @@ function MetasTab({ goals, goalForm, setGoalForm, showGoalForm, editingGoalId, g
   );
 }
 
-function GoalCard({ goal, onEdit, onDelete, onContribute, onDeleteHistoryEntry }) {
+function GoalCard({ goal, onEdit, onDelete, onContribute, onDeleteHistoryEntry, savingsAccounts, onContributeSavings }) {
   const [amount, setAmount] = useState("");
   const [showHistory, setShowHistory] = useState(false);
-  const history = goal.history || [];
-  const pct = goal.targetAmount > 0 ? (goal.currentAmount / goal.targetAmount) * 100 : 0;
-  const done = goal.currentAmount >= goal.targetAmount;
-  const remaining = Math.max(0, goal.targetAmount - goal.currentAmount);
+  const [showSim, setShowSim] = useState(false);
+
+  // Se a meta está vinculada a uma poupança, o progresso vem de lá
+  const poupancaVinculada = goal.linkedSavingsId
+    ? (savingsAccounts || []).find((a) => a.id === goal.linkedSavingsId)
+    : null;
+  const vinculada = !!poupancaVinculada;
+
+  const atual = vinculada ? poupancaVinculada.currentAmount : goal.currentAmount;
+  const history = vinculada ? (poupancaVinculada.history || []) : (goal.history || []);
+
+  const pct = goal.targetAmount > 0 ? (atual / goal.targetAmount) * 100 : 0;
+  const done = atual >= goal.targetAmount;
+  const remaining = Math.max(0, goal.targetAmount - atual);
 
   let monthlySuggestion = null;
   let deadlinePassed = false;
+  let mesesRestantes = null;
   if (goal.deadline && !done) {
     const now = new Date(); now.setHours(0, 0, 0, 0);
     const deadline = new Date(goal.deadline + "T00:00:00");
@@ -3217,15 +3365,27 @@ function GoalCard({ goal, onEdit, onDelete, onContribute, onDeleteHistoryEntry }
     if (diffDays <= 0) {
       deadlinePassed = true;
     } else {
-      const monthsLeft = Math.max(1, Math.round(diffDays / 30.44));
-      monthlySuggestion = remaining / monthsLeft;
+      mesesRestantes = Math.max(1, Math.round(diffDays / 30.44));
+      monthlySuggestion = remaining / mesesRestantes;
     }
   }
+
+  // Simulador: quanto tempo levaria com um aporte mensal escolhido
+  const [aporteSim, setAporteSim] = useState(0);
+  useEffect(() => {
+    if (monthlySuggestion && aporteSim === 0) setAporteSim(Math.round(monthlySuggestion));
+  }, [monthlySuggestion]);
+
+  const aporteBase = monthlySuggestion || (remaining > 0 ? remaining / 12 : 100);
+  const simMax = Math.max(50, Math.ceil((aporteBase * 3) / 50) * 50);
+  const mesesSim = aporteSim > 0 ? Math.ceil(remaining / aporteSim) : null;
+  const dataSim = mesesSim ? new Date(new Date().getFullYear(), new Date().getMonth() + mesesSim, 1) : null;
 
   const submitDelta = (sign) => {
     const num = parseFloat(String(amount).replace(",", "."));
     if (!num || num <= 0) return;
-    onContribute(goal.id, num * sign);
+    if (vinculada) onContributeSavings(goal.linkedSavingsId, num * sign);
+    else onContribute(goal.id, num * sign);
     setAmount("");
   };
 
@@ -3242,8 +3402,14 @@ function GoalCard({ goal, onEdit, onDelete, onContribute, onDeleteHistoryEntry }
         </div>
       </div>
 
+      {vinculada && (
+        <div className="text-xs mb-2 inline-flex items-center gap-1.5 px-2 py-1 rounded" style={{ background: "var(--paper-alt)", color: "var(--ink-soft)" }}>
+          <Landmark size={11} /> Vinculada à poupança "{poupancaVinculada.label}"
+        </div>
+      )}
+
       <div className="flex items-baseline justify-between mb-2">
-        <span className="rz-mono text-lg font-semibold" style={{ color: done ? "var(--emerald)" : "var(--ink)" }}>{formatCurrency(goal.currentAmount)}</span>
+        <span className="rz-mono text-lg font-semibold" style={{ color: done ? "var(--emerald)" : "var(--ink)" }}>{formatCurrency(atual)}</span>
         <span className="rz-mono text-xs" style={{ color: "var(--ink-soft)" }}>de {formatCurrency(goal.targetAmount)}</span>
       </div>
 
@@ -3269,11 +3435,54 @@ function GoalCard({ goal, onEdit, onDelete, onContribute, onDeleteHistoryEntry }
       {done ? (
         <span className="rz-stamp rz-stamp-pago inline-flex items-center gap-1"><PartyPopper size={11} /> Meta concluída</span>
       ) : (
-        <div className="flex items-center gap-2">
-          <input className="rz-input rz-focus rz-mono text-sm flex-1" inputMode="decimal" placeholder="Valor" value={amount} onChange={(e) => setAmount(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submitDelta(1)} />
-          <button onClick={() => submitDelta(1)} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--emerald)" }} aria-label="Adicionar valor"><Plus size={16} /></button>
-          <button onClick={() => submitDelta(-1)} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--brick)" }} aria-label="Retirar valor"><Minus size={16} /></button>
-        </div>
+        <>
+          <div className="flex items-center gap-2">
+            <input className="rz-input rz-focus rz-mono text-sm flex-1" inputMode="decimal" placeholder="Valor" value={amount} onChange={(e) => setAmount(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submitDelta(1)} />
+            <button onClick={() => submitDelta(1)} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--emerald)" }} aria-label="Adicionar valor"><Plus size={16} /></button>
+            <button onClick={() => submitDelta(-1)} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--brick)" }} aria-label="Retirar valor"><Minus size={16} /></button>
+          </div>
+
+          <button onClick={() => setShowSim((v) => !v)} className="rz-focus text-xs font-medium mt-3 flex items-center gap-1" style={{ color: "var(--ink-soft)" }}>
+            <Target size={13} /> {showSim ? "Ocultar" : "Simular"} ritmo de economia
+          </button>
+
+          {showSim && (
+            <div className="mt-2 p-3 rounded-lg" style={{ background: "var(--paper-alt)" }}>
+              <div className="flex items-baseline justify-between mb-2">
+                <span className="text-xs" style={{ color: "var(--ink-soft)" }}>Guardando por mês</span>
+                <span className="rz-mono text-sm font-semibold">{formatCurrency(aporteSim)}</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max={simMax}
+                step="10"
+                value={aporteSim}
+                onChange={(e) => setAporteSim(Number(e.target.value))}
+                className="w-full rz-focus"
+                style={{ accentColor: goal.color }}
+              />
+              <p className="text-xs mt-2" style={{ color: "var(--ink-soft)" }}>
+                {aporteSim <= 0 ? (
+                  "Escolha um valor para simular."
+                ) : (
+                  <>
+                    Faltam {formatCurrency(remaining)} — nesse ritmo você chega em{" "}
+                    <strong style={{ color: "var(--ink)" }}>
+                      {mesesSim} {mesesSim === 1 ? "mês" : "meses"}
+                    </strong>
+                    {dataSim && `, por volta de ${MONTHS[dataSim.getMonth()].slice(0, 3)}/${dataSim.getFullYear()}`}.
+                    {goal.deadline && !deadlinePassed && mesesRestantes && (
+                      mesesSim <= mesesRestantes
+                        ? <span style={{ color: "var(--emerald)" }}> Dentro do prazo. ✓</span>
+                        : <span style={{ color: "var(--brick)" }}> {mesesSim - mesesRestantes} {mesesSim - mesesRestantes === 1 ? "mês" : "meses"} além do prazo.</span>
+                    )}
+                  </>
+                )}
+              </p>
+            </div>
+          )}
+        </>
       )}
 
       {history.length > 0 && (
@@ -3289,9 +3498,11 @@ function GoalCard({ goal, onEdit, onDelete, onContribute, onDeleteHistoryEntry }
                   <span className="rz-mono text-xs font-semibold" style={{ color: h.amount >= 0 ? "var(--emerald)" : "var(--brick)" }}>
                     {h.amount >= 0 ? "+ " : "− "}{formatCurrency(Math.abs(h.amount))}
                   </span>
-                  <button onClick={() => onDeleteHistoryEntry(goal.id, h.id)} className="rz-focus p-1 rounded-md" aria-label="Excluir movimentação" style={{ color: "var(--ink-soft)" }}>
-                    <Trash2 size={12} />
-                  </button>
+                  {!vinculada && (
+                    <button onClick={() => onDeleteHistoryEntry(goal.id, h.id)} className="rz-focus p-1 rounded-md" aria-label="Excluir movimentação" style={{ color: "var(--ink-soft)" }}>
+                      <Trash2 size={12} />
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
@@ -3301,6 +3512,7 @@ function GoalCard({ goal, onEdit, onDelete, onContribute, onDeleteHistoryEntry }
     </div>
   );
 }
+
 
 function FixedBillsTab({
   fixedBills, transactions, refDate, shiftMonth, categoriesByType, banksList, findCategory, findBank,
@@ -3722,12 +3934,13 @@ function CsvImportModal({ categoriesByType, banksList, onConfirm, onCancel, cate
 }
 
 
-function DividasTab({ debts, debtForm, setDebtForm, showDebtForm, editingDebtId, debtError, onOpenNew, onOpenEdit, onSubmit, onDelete, onCancelForm, onPayment, onToggleSettled }) {
+function DividasTab({ debts, debtForm, setDebtForm, showDebtForm, editingDebtId, debtError, onOpenNew, onOpenEdit, onSubmit, onDelete, onCancelForm, onPayment, onToggleSettled, categoriesByType, banksList }) {
   const abertas = debts.filter((d) => !d.settled);
   const quitadas = debts.filter((d) => d.settled);
 
   const aReceber = abertas.filter((d) => d.direction === "emprestei").reduce((s, d) => s + (d.amount - (d.paid || 0)), 0);
   const aPagar = abertas.filter((d) => d.direction === "devo").reduce((s, d) => s + (d.amount - (d.paid || 0)), 0);
+  const minhasDividas = abertas.filter((d) => d.direction === "devo");
 
   return (
     <div>
@@ -3746,6 +3959,10 @@ function DividasTab({ debts, debtForm, setDebtForm, showDebtForm, editingDebtId,
         <SummaryCard label="Tenho a pagar" value={aPagar} icon={TrendingDown} tone="brick" />
       </div>
 
+      {minhasDividas.length > 1 && (
+        <EstrategiaQuitacao dividas={minhasDividas} />
+      )}
+
       {debts.length === 0 ? (
         <div className="rz-card p-10 text-center">
           <HandCoins size={26} className="mx-auto mb-3" style={{ color: "var(--line)" }} />
@@ -3759,7 +3976,7 @@ function DividasTab({ debts, debtForm, setDebtForm, showDebtForm, editingDebtId,
         <>
           {abertas.length > 0 && (
             <div className="grid sm:grid-cols-2 gap-4 mb-6">
-              {abertas.map((d) => <DebtCard key={d.id} debt={d} onEdit={onOpenEdit} onDelete={onDelete} onPayment={onPayment} onToggleSettled={onToggleSettled} />)}
+              {abertas.map((d) => <DebtCard key={d.id} debt={d} onEdit={onOpenEdit} onDelete={onDelete} onPayment={onPayment} onToggleSettled={onToggleSettled} categoriesByType={categoriesByType} banksList={banksList} />)}
             </div>
           )}
 
@@ -3823,9 +4040,15 @@ function DividasTab({ debts, debtForm, setDebtForm, showDebtForm, editingDebtId,
                 </div>
               </div>
 
-              <div>
-                <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Previsão de acerto (opcional)</label>
-                <input type="date" className="rz-input rz-focus rz-mono" value={debtForm.dueDate} onChange={(e) => setDebtForm({ ...debtForm, dueDate: e.target.value })} />
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Previsão de acerto (opcional)</label>
+                  <input type="date" className="rz-input rz-focus rz-mono" value={debtForm.dueDate} onChange={(e) => setDebtForm({ ...debtForm, dueDate: e.target.value })} />
+                </div>
+                <div className="flex-1">
+                  <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Juros ao mês (%)</label>
+                  <input className="rz-input rz-focus rz-mono" inputMode="decimal" placeholder="0" value={debtForm.interestRate} onChange={(e) => setDebtForm({ ...debtForm, interestRate: e.target.value })} />
+                </div>
               </div>
 
               <div>
@@ -3853,8 +4076,127 @@ function DividasTab({ debts, debtForm, setDebtForm, showDebtForm, editingDebtId,
   );
 }
 
-function DebtCard({ debt, onEdit, onDelete, onPayment, onToggleSettled }) {
+function categoriasByTypeSafe(categoriesByType, tipo) {
+  if (!categoriesByType || !categoriesByType[tipo]) return [];
+  return categoriesByType[tipo];
+}
+
+function EstrategiaQuitacao({ dividas }) {
+  const [extra, setExtra] = useState("300");
+  const [metodo, setMetodo] = useState("avalanche");
+
+  const totalDevido = dividas.reduce((s, d) => s + (d.amount - (d.paid || 0)), 0);
+  const valorExtra = parseFloat(String(extra).replace(",", ".")) || 0;
+
+  // Bola de neve: menor saldo primeiro (ganho psicológico).
+  // Avalanche: maior juros primeiro (economiza mais dinheiro).
+  const ordenadas = [...dividas].sort((a, b) => {
+    const saldoA = a.amount - (a.paid || 0);
+    const saldoB = b.amount - (b.paid || 0);
+    if (metodo === "bola") return saldoA - saldoB;
+    const jurosA = a.interestRate || 0;
+    const jurosB = b.interestRate || 0;
+    if (jurosB !== jurosA) return jurosB - jurosA;
+    return saldoA - saldoB;
+  });
+
+  // Simula mês a mês: paga o mínimo (juros) de todas e joga o extra na primeira da fila
+  const simulacao = useMemo(() => {
+    if (valorExtra <= 0) return null;
+    let saldos = ordenadas.map((d) => ({ id: d.id, person: d.person, saldo: d.amount - (d.paid || 0), juros: (d.interestRate || 0) / 100 }));
+    let meses = 0;
+    let jurosPagos = 0;
+    const quitacoes = [];
+    while (saldos.some((s) => s.saldo > 0.01) && meses < 600) {
+      meses++;
+      saldos.forEach((s) => {
+        if (s.saldo > 0) { const j = s.saldo * s.juros; s.saldo += j; jurosPagos += j; }
+      });
+      let disponivel = valorExtra;
+      for (const s of saldos) {
+        if (disponivel <= 0) break;
+        if (s.saldo <= 0) continue;
+        const pagar = Math.min(disponivel, s.saldo);
+        s.saldo -= pagar;
+        disponivel -= pagar;
+        if (s.saldo <= 0.01 && !quitacoes.find((q) => q.id === s.id)) {
+          quitacoes.push({ id: s.id, person: s.person, mes: meses });
+        }
+      }
+    }
+    return { meses, jurosPagos, quitacoes, naoQuita: meses >= 600 };
+  }, [ordenadas, valorExtra]);
+
+  return (
+    <div className="rz-card p-4 sm:p-5 mb-6">
+      <h2 className="text-sm font-semibold mb-1">Plano de quitação</h2>
+      <p className="text-xs mb-4" style={{ color: "var(--ink-soft)" }}>
+        Você deve {formatCurrency(totalDevido)} no total. Veja em que ordem pagar e quanto tempo levaria.
+      </p>
+
+      <div className="flex flex-col sm:flex-row gap-3 mb-4">
+        <div className="flex-1">
+          <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Quanto consigo pagar por mês</label>
+          <input className="rz-input rz-focus rz-mono" inputMode="decimal" value={extra} onChange={(e) => setExtra(e.target.value)} />
+        </div>
+        <div className="flex-1">
+          <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Estratégia</label>
+          <select className="rz-input rz-focus" value={metodo} onChange={(e) => setMetodo(e.target.value)}>
+            <option value="avalanche">Avalanche — maior juros primeiro</option>
+            <option value="bola">Bola de neve — menor dívida primeiro</option>
+          </select>
+        </div>
+      </div>
+
+      <p className="text-xs mb-4 px-3 py-2 rounded-lg" style={{ background: "var(--paper-alt)", color: "var(--ink-soft)" }}>
+        {metodo === "avalanche"
+          ? "Avalanche paga menos juros no total — é a escolha matematicamente melhor."
+          : "Bola de neve quita dívidas pequenas rápido, o que ajuda a manter a motivação, mesmo custando um pouco mais de juros."}
+      </p>
+
+      <h3 className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: "var(--ink-soft)" }}>Ordem sugerida</h3>
+      <div className="flex flex-col mb-4">
+        {ordenadas.map((d, i) => {
+          const saldo = d.amount - (d.paid || 0);
+          const quitacao = simulacao?.quitacoes.find((q) => q.id === d.id);
+          return (
+            <div key={d.id} className="flex items-center gap-3 py-2" style={{ borderTop: i === 0 ? "none" : "1px solid var(--line)" }}>
+              <span className="rz-mono text-xs w-5 shrink-0" style={{ color: "var(--ink-soft)" }}>{i + 1}º</span>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm truncate">{d.person}</div>
+                <div className="text-xs" style={{ color: "var(--ink-soft)" }}>
+                  {d.interestRate ? `${d.interestRate}% ao mês` : "sem juros"}
+                  {quitacao && ` · quita no mês ${quitacao.mes}`}
+                </div>
+              </div>
+              <span className="rz-mono text-sm font-semibold whitespace-nowrap" style={{ color: "var(--brick)" }}>{formatCurrency(saldo)}</span>
+            </div>
+          );
+        })}
+      </div>
+
+      {simulacao && (
+        simulacao.naoQuita ? (
+          <div className="text-xs px-3 py-2 rounded-lg" style={{ background: "var(--brick-soft)", color: "var(--brick)" }}>
+            Com {formatCurrency(valorExtra)}/mês, os juros crescem mais rápido que os pagamentos — a dívida nunca é quitada. Tente um valor maior.
+          </div>
+        ) : (
+          <div className="text-sm px-3 py-3 rounded-lg" style={{ background: "var(--emerald-soft)", color: "var(--emerald)" }}>
+            Pagando {formatCurrency(valorExtra)} por mês, você quita tudo em{" "}
+            <strong>{simulacao.meses} {simulacao.meses === 1 ? "mês" : "meses"}</strong>
+            {simulacao.jurosPagos > 0.5 && <> e terá pago {formatCurrency(simulacao.jurosPagos)} em juros</>}.
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
+function DebtCard({ debt, onEdit, onDelete, onPayment, onToggleSettled, categoriesByType, banksList }) {
   const [valor, setValor] = useState("");
+  const [gerarLancamento, setGerarLancamento] = useState(true);
+  const [categoria, setCategoria] = useState("");
+  const [conta, setConta] = useState("");
   const emprestei = debt.direction === "emprestei";
   const pago = debt.paid || 0;
   const restante = debt.amount - pago;
@@ -3864,10 +4206,14 @@ function DebtCard({ debt, onEdit, onDelete, onPayment, onToggleSettled }) {
   const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
   const atrasada = debt.dueDate && new Date(debt.dueDate + "T00:00:00") < hoje;
 
+  const tipoLanc = emprestei ? "receita" : "despesa";
+  const categoriasDisponiveis = (categoriasByTypeSafe(categoriesByType, tipoLanc));
+
   const registrar = () => {
     const v = parseFloat(String(valor).replace(",", "."));
     if (!v || v <= 0) return;
-    onPayment(debt.id, v);
+    if (gerarLancamento && !categoria) return;
+    onPayment(debt.id, v, gerarLancamento, categoria, conta);
     setValor("");
   };
 
@@ -3909,6 +4255,12 @@ function DebtCard({ debt, onEdit, onDelete, onPayment, onToggleSettled }) {
         </div>
       )}
 
+      {debt.interestRate > 0 && (
+        <div className="text-xs mb-2" style={{ color: "var(--gold)" }}>
+          {debt.interestRate}% ao mês · cresce {formatCurrency(restante * (debt.interestRate / 100))} se não pagar
+        </div>
+      )}
+
       {debt.notes && <div className="text-xs mb-3" style={{ color: "var(--ink-soft)" }}>{debt.notes}</div>}
 
       <div className="flex items-center gap-2">
@@ -3923,6 +4275,35 @@ function DebtCard({ debt, onEdit, onDelete, onPayment, onToggleSettled }) {
         <button onClick={registrar} className="rz-focus p-1.5 rounded-md" style={{ color: cor }} aria-label="Registrar acerto"><Plus size={16} /></button>
         <button onClick={() => onToggleSettled(debt)} className="rz-btn-ghost rz-focus text-xs !py-1.5 !px-3 whitespace-nowrap">Quitar</button>
       </div>
+
+      <button
+        type="button"
+        onClick={() => setGerarLancamento((v) => !v)}
+        className="rz-focus flex items-center gap-2 text-xs mt-2"
+        style={{ color: "var(--ink-soft)" }}
+      >
+        <span style={{
+          width: 14, height: 14, borderRadius: 4, border: "1.5px solid var(--line)",
+          background: gerarLancamento ? "var(--ink)" : "var(--surface)",
+          display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+        }}>
+          {gerarLancamento && <Check size={10} color="var(--paper)" />}
+        </span>
+        Registrar também como {emprestei ? "receita" : "despesa"} na minha conta
+      </button>
+
+      {gerarLancamento && (
+        <div className="flex gap-2 mt-2">
+          <select className="rz-input rz-focus text-xs flex-1" value={categoria} onChange={(e) => setCategoria(e.target.value)}>
+            <option value="">Categoria…</option>
+            {categoriasDisponiveis.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+          </select>
+          <select className="rz-input rz-focus text-xs flex-1" value={conta} onChange={(e) => setConta(e.target.value)}>
+            <option value="">Sem conta</option>
+            {(banksList || []).map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
+          </select>
+        </div>
+      )}
     </div>
   );
 }
