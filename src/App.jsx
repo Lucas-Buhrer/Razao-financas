@@ -248,18 +248,30 @@ function getAmountForPeriod(bill, refDate) {
   return applicable.amount;
 }
 
+// Efeito de um lançamento sobre o total que você tem em contas.
+// Transferência entre contas se anula; para caixinha, o dinheiro sai das contas.
+function efeitoNoSaldoGeral(t) {
+  if (t.type === "transferencia") {
+    if (t.toBox) return -t.amount;    // guardou numa caixinha
+    if (t.fromBox) return t.amount;   // resgatou de uma caixinha
+    return 0;                          // entre contas
+  }
+  return t.type === "receita" ? t.amount : -t.amount;
+}
+
 function buildCashFlowProjection(transactions, fixedBills, horizonDays, saldosIniciais = 0) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const baseline = saldosIniciais + transactions.filter((t) => t.status === "pago" && t.type !== "transferencia").reduce((s, t) => s + (t.type === "receita" ? t.amount : -t.amount), 0);
+  const baseline = saldosIniciais + transactions.filter((t) => t.status === "pago").reduce((s, t) => s + efeitoNoSaldoGeral(t), 0);
 
   const events = [];
 
   transactions.forEach((t) => {
-    if (t.status !== "pendente" || t.type === "transferencia") return;
+    if (t.status !== "pendente") return;
+    if (t.type === "transferencia" && !t.toBox && !t.fromBox) return;
     const d = new Date(t.date + "T00:00:00");
     const diffDays = Math.round((d - today) / 86400000);
     if (diffDays >= 0 && diffDays <= horizonDays) {
-      events.push({ date: d, amount: t.type === "receita" ? t.amount : -t.amount });
+      events.push({ date: d, amount: efeitoNoSaldoGeral(t) });
     }
   });
 
@@ -1226,15 +1238,43 @@ export default function App() {
     setSavingsAccounts((prev) => prev.filter((s) => s.id !== account.id));
   };
 
-  const handleContributeSavings = (accountId, delta) => {
-    setSavingsAccounts((prev) => prev.map((s) => (s.id === accountId ? {
+  const handleContributeSavings = (boxId, delta, contaId) => {
+    const box = savingsAccounts.find((s) => s.id === boxId);
+    const hoje = todayISO();
+    const txId = contaId ? uid() : null;
+    const conta = contaId ? findBank(contaId) : null;
+
+    setSavingsAccounts((prev) => prev.map((s) => (s.id === boxId ? {
       ...s,
       currentAmount: Math.max(0, s.currentAmount + delta),
-      history: [...(s.history || []), { id: uid(), date: todayISO(), amount: delta }],
+      history: [...(s.history || []), {
+        id: uid(), date: hoje, amount: delta, txId,
+        note: conta ? (delta > 0 ? `de ${conta.label}` : `para ${conta.label}`) : undefined,
+      }],
     } : s)));
+
+    // Se veio de (ou voltou para) uma conta, o dinheiro precisa sair/entrar de verdade
+    if (contaId && box) {
+      const guardando = delta > 0;
+      setTransactions((prev) => [...prev, {
+        id: txId,
+        description: guardando ? `Guardado em ${box.label}` : `Resgatado de ${box.label}`,
+        amount: Math.abs(delta), date: hoje, type: "transferencia", category: "",
+        account: guardando ? contaId : "",
+        toAccount: guardando ? "" : contaId,
+        toBox: guardando ? boxId : "",
+        fromBox: guardando ? "" : boxId,
+        status: "pago", createdBy: currentUserEmail,
+      }]);
+    }
   };
 
   const handleDeleteSavingsHistoryEntry = (accountId, entryId) => {
+    const box = savingsAccounts.find((s) => s.id === accountId);
+    const alvo = box && (box.history || []).find((h) => h.id === entryId);
+    if (alvo && alvo.txId) {
+      setTransactions((prev) => prev.filter((t) => t.id !== alvo.txId));
+    }
     setSavingsAccounts((prev) => prev.map((s) => {
       if (s.id !== accountId) return s;
       const entry = (s.history || []).find((h) => h.id === entryId);
@@ -1445,6 +1485,7 @@ export default function App() {
             onArchive={handleArchiveSavings}
             onMove={handleMoveSavings}
             onTransfer={handleTransferSavings}
+            banksList={banksList}
           />
         ) : activeTab === "config" ? (
           <ConfiguracoesTab
@@ -4141,7 +4182,7 @@ function CarteiraTab({ transactions, banksList, setActiveTab }) {
 }
 
 
-function CaixinhasTab({ boxes, savingsForm, setSavingsForm, savingsError, onAdd, onDelete, onContribute, onDeleteHistoryEntry, onUpdate, onArchive, onMove, onTransfer }) {
+function CaixinhasTab({ boxes, savingsForm, setSavingsForm, savingsError, onAdd, onDelete, onContribute, onDeleteHistoryEntry, onUpdate, onArchive, onMove, onTransfer, banksList }) {
   const [showTransfer, setShowTransfer] = useState(false);
   const [transfer, setTransfer] = useState({ origem: "", destino: "", valor: "" });
   const [transferError, setTransferError] = useState("");
@@ -4242,6 +4283,7 @@ function CaixinhasTab({ boxes, savingsForm, setSavingsForm, savingsError, onAdd,
               onUpdate={onUpdate}
               onArchive={onArchive}
               onMove={onMove}
+              banksList={banksList}
             />
           ))}
         </div>
@@ -4316,8 +4358,9 @@ function CaixinhasTab({ boxes, savingsForm, setSavingsForm, savingsError, onAdd,
   );
 }
 
-function CaixinhaCard({ box, primeira, ultima, onDelete, onContribute, onDeleteHistoryEntry, onUpdate, onArchive, onMove }) {
+function CaixinhaCard({ box, primeira, ultima, onDelete, onContribute, onDeleteHistoryEntry, onUpdate, onArchive, onMove, banksList }) {
   const [amount, setAmount] = useState("");
+  const [contaOrigem, setContaOrigem] = useState("");
   const [showHistory, setShowHistory] = useState(false);
   const [showSim, setShowSim] = useState(false);
   const [editandoAlvo, setEditandoAlvo] = useState(false);
@@ -4357,7 +4400,7 @@ function CaixinhaCard({ box, primeira, ultima, onDelete, onContribute, onDeleteH
   const submitDelta = (sign) => {
     const num = parseFloat(String(amount).replace(",", "."));
     if (!num || num <= 0) return;
-    onContribute(box.id, num * sign);
+    onContribute(box.id, num * sign, contaOrigem);
     setAmount("");
   };
 
@@ -4450,6 +4493,22 @@ function CaixinhaCard({ box, primeira, ultima, onDelete, onContribute, onDeleteH
                 <button onClick={() => submitDelta(-1)} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--brick)" }} aria-label="Retirar"><Minus size={16} /></button>
               </div>
 
+              <select
+                className="rz-input rz-focus text-xs mt-2"
+                value={contaOrigem}
+                onChange={(e) => setContaOrigem(e.target.value)}
+              >
+                <option value="">Dinheiro de fora das contas (não mexe no saldo)</option>
+                {(banksList || []).map((b) => (
+                  <option key={b.id} value={b.id}>Sai / volta para: {b.label}</option>
+                ))}
+              </select>
+              {contaOrigem && (
+                <p className="text-xs mt-1" style={{ color: "var(--ink-soft)" }}>
+                  Vai gerar uma transferência, baixando o saldo dessa conta.
+                </p>
+              )}
+
               {temAlvo && (
                 <>
                   <button onClick={() => setShowSim((v) => !v)} className="rz-focus text-xs font-medium mt-3 flex items-center gap-1" style={{ color: "var(--ink-soft)" }}>
@@ -4521,8 +4580,8 @@ function CaixinhaCard({ box, primeira, ultima, onDelete, onContribute, onDeleteH
 
 function VisaoGeralTab({ transactions, periodFiltered, totals, refDate, periodMode, shiftMonth, setPeriodMode, findCategory, setActiveTab, fixedBills, findBank, onLaunchFixedBill, savingsAccounts, saldosIniciais }) {
   const saldoTotal = useMemo(
-    () => saldosIniciais + transactions.filter((t) => t.status === "pago" && t.type !== "transferencia")
-      .reduce((s, t) => s + (t.type === "receita" ? t.amount : -t.amount), 0),
+    () => saldosIniciais + transactions.filter((t) => t.status === "pago")
+      .reduce((s, t) => s + efeitoNoSaldoGeral(t), 0),
     [transactions, saldosIniciais]
   );
 
@@ -4535,8 +4594,8 @@ function VisaoGeralTab({ transactions, periodFiltered, totals, refDate, periodMo
       ? new Date(8640000000000000)
       : new Date(refDate.getFullYear(), refDate.getMonth() + 1, 0, 23, 59, 59);
     const pendentes = transactions
-      .filter((t) => t.status === "pendente" && t.type !== "transferencia" && new Date(t.date + "T00:00:00") <= endOfPeriod)
-      .reduce((s, t) => s + (t.type === "receita" ? t.amount : -t.amount), 0);
+      .filter((t) => t.status === "pendente" && new Date(t.date + "T00:00:00") <= endOfPeriod)
+      .reduce((s, t) => s + efeitoNoSaldoGeral(t), 0);
     const fixasNaoLancadas = periodMode === "todos" ? 0 : enrichFixedBills(fixedBills, transactions, refDate)
       .filter((b) => b.active && b.status !== "lancada")
       .reduce((s, b) => s + (b.type === "receita" ? b.amount : -b.amount), 0);
@@ -4557,8 +4616,8 @@ function VisaoGeralTab({ transactions, periodFiltered, totals, refDate, periodMo
     return months.map((d) => {
       const endOfMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59);
       const saldo = saldosIniciais + transactions
-        .filter((t) => t.status === "pago" && t.type !== "transferencia" && new Date(t.date + "T00:00:00") <= endOfMonth)
-        .reduce((s, t) => s + (t.type === "receita" ? t.amount : -t.amount), 0);
+        .filter((t) => t.status === "pago" && new Date(t.date + "T00:00:00") <= endOfMonth)
+        .reduce((s, t) => s + efeitoNoSaldoGeral(t), 0);
       return { mes: `${MONTHS[d.getMonth()].slice(0, 3)}/${String(d.getFullYear()).slice(2)}`, saldo };
     });
   }, [transactions, refDate]);
