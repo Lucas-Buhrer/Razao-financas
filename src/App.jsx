@@ -464,7 +464,7 @@ export default function App() {
   // ---------- Toast auto-dismiss ----------
   useEffect(() => {
     if (!toast) return;
-    toastTimer.current = setTimeout(() => setToast(null), 5000);
+    toastTimer.current = setTimeout(() => setToast(null), toast.snapshot ? 9000 : 5000);
     return () => clearTimeout(toastTimer.current);
   }, [toast]);
 
@@ -726,8 +726,9 @@ export default function App() {
         recurringId: bill.id, recurringPeriod: period, createdBy: currentUserEmail,
       };
     });
+    const avisar = avisarComDesfazer(`${novos.length} conta${novos.length !== 1 ? "s" : ""} fixa${novos.length !== 1 ? "s" : ""} lançada${novos.length !== 1 ? "s" : ""}.`);
     setTransactions((prev) => [...prev, ...novos]);
-    setToast({ message: `${novos.length} conta${novos.length !== 1 ? "s" : ""} fixa${novos.length !== 1 ? "s" : ""} lançada${novos.length !== 1 ? "s" : ""}.` });
+    avisar();
   };
 
   const handleDuplicate = (t) => {
@@ -767,8 +768,9 @@ export default function App() {
     if (pendentes.length === 0) return;
     if (!window.confirm(`Marcar ${pendentes.length} lançamento${pendentes.length !== 1 ? "s" : ""} como pago?`)) return;
     const ids = new Set(pendentes.map((t) => t.id));
+    const avisar = avisarComDesfazer(`${pendentes.length} lançamento${pendentes.length !== 1 ? "s" : ""} marcado${pendentes.length !== 1 ? "s" : ""} como pago.`);
     setTransactions((prev) => prev.map((t) => (ids.has(t.id) ? { ...t, status: "pago" } : t)));
-    setToast({ message: `${pendentes.length} lançamento${pendentes.length !== 1 ? "s" : ""} marcado${pendentes.length !== 1 ? "s" : ""} como pago.` });
+    avisar();
   };
 
   const handleQuickAdd = () => {
@@ -843,41 +845,46 @@ export default function App() {
     if (!t.installmentGroupId) return;
     const doGrupo = transactions.filter((x) => x.installmentGroupId === t.installmentGroupId);
     if (!window.confirm(`Excluir todas as ${doGrupo.length} parcelas de "${t.description.replace(/ \(\d+\/\d+\)$/, "")}"?`)) return;
+    const avisar = avisarComDesfazer(`${doGrupo.length} parcelas excluídas.`);
     setTransactions((prev) => prev.filter((x) => x.installmentGroupId !== t.installmentGroupId));
-    setToast({ message: `${doGrupo.length} parcelas excluídas.` });
+    avisar();
   };
 
   const handleBulkDelete = () => {
     if (selecionados.length === 0) return;
     if (!window.confirm(`Excluir ${selecionados.length} lançamento${selecionados.length !== 1 ? "s" : ""}?`)) return;
     const ids = new Set(selecionados);
+    const avisar = avisarComDesfazer(`${ids.size} lançamento${ids.size !== 1 ? "s" : ""} excluído${ids.size !== 1 ? "s" : ""}.`);
     setTransactions((prev) => prev.filter((t) => !ids.has(t.id)));
     setSelecionados([]);
-    setToast({ message: `${ids.size} lançamento${ids.size !== 1 ? "s" : ""} excluído${ids.size !== 1 ? "s" : ""}.` });
+    avisar();
   };
 
   const handleBulkCategory = (categoriaId) => {
     if (selecionados.length === 0 || !categoriaId) return;
     const ids = new Set(selecionados);
+    const avisar = avisarComDesfazer(`Categoria aplicada a ${ids.size} lançamento${ids.size !== 1 ? "s" : ""}.`);
     setTransactions((prev) => prev.map((t) => (ids.has(t.id) && t.type !== "transferencia" ? { ...t, category: categoriaId } : t)));
     setSelecionados([]);
-    setToast({ message: `Categoria aplicada a ${ids.size} lançamento${ids.size !== 1 ? "s" : ""}.` });
+    avisar();
   };
 
   const handleBulkAccount = (contaId) => {
     if (selecionados.length === 0) return;
     const ids = new Set(selecionados);
+    const avisar = avisarComDesfazer(`Conta aplicada a ${ids.size} lançamento${ids.size !== 1 ? "s" : ""}.`);
     setTransactions((prev) => prev.map((t) => (ids.has(t.id) ? { ...t, account: contaId } : t)));
     setSelecionados([]);
-    setToast({ message: `Conta aplicada a ${ids.size} lançamento${ids.size !== 1 ? "s" : ""}.` });
+    avisar();
   };
 
   const handleBulkPaid = (novoStatus) => {
     if (selecionados.length === 0) return;
     const ids = new Set(selecionados);
+    const avisar = avisarComDesfazer(`${ids.size} lançamento${ids.size !== 1 ? "s" : ""} marcado${ids.size !== 1 ? "s" : ""} como ${novoStatus}.`);
     setTransactions((prev) => prev.map((t) => (ids.has(t.id) ? { ...t, status: novoStatus } : t)));
     setSelecionados([]);
-    setToast({ message: `${ids.size} lançamento${ids.size !== 1 ? "s" : ""} atualizado${ids.size !== 1 ? "s" : ""}.` });
+    avisar();
   };
 
   const toggleSelecionado = (id) => {
@@ -900,8 +907,16 @@ export default function App() {
   };
 
   const handleUndo = () => {
-    if (toast?.item) setTransactions((prev) => [...prev, toast.item]);
+    // Ações em massa guardam a lista inteira anterior; a individual guarda só o item.
+    if (toast?.snapshot) setTransactions(toast.snapshot);
+    else if (toast?.item) setTransactions((prev) => [...prev, toast.item]);
     setToast(null);
+  };
+
+  // Atalho para ações que mexem em vários lançamentos de uma vez.
+  const avisarComDesfazer = (message) => {
+    const anterior = transactions;
+    return () => setToast({ message, snapshot: anterior });
   };
 
   const irParaHoje = () => setRefDate(new Date());
@@ -1261,9 +1276,10 @@ export default function App() {
       category: r.category,
       account, status: status || "pago", createdBy: currentUserEmail,
     }));
+    const avisar = avisarComDesfazer(`${newTxs.length} lançamento${newTxs.length !== 1 ? "s" : ""} importado${newTxs.length !== 1 ? "s" : ""} com sucesso.`);
     setTransactions((prev) => [...prev, ...newTxs]);
     setShowCsvImport(false);
-    setToast({ message: `${newTxs.length} lançamento${newTxs.length !== 1 ? "s" : ""} importado${newTxs.length !== 1 ? "s" : ""} com sucesso.` });
+    avisar();
   };
 
   const handleAddBudget = () => {
@@ -2155,7 +2171,7 @@ export default function App() {
         <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50">
           <div className="flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg max-w-[90vw]" style={{ background: toast.tone === "warning" ? "var(--brick)" : "var(--ink)", color: "var(--paper)" }}>
             <span className="text-sm">{toast.message}</span>
-            {toast.item && (
+            {(toast.item || toast.snapshot) && (
               <button onClick={handleUndo} className="rz-focus flex items-center gap-1 text-sm font-semibold shrink-0" style={{ color: "#8FE0C4" }}>
                 <Undo2 size={14} /> Desfazer
               </button>
