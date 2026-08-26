@@ -3,14 +3,16 @@ import { Check, ChevronLeft, ChevronRight, Pencil, Trash2, X } from "lucide-reac
 import { COLOR_PALETTE, MONTHS } from "../lib/constants";
 import { formatCurrency } from "../lib/format";
 
-function SummaryCard({ label, value, icon: Icon, tone }) {
+function SummaryCard({ label, value, icon: Icon, tone, rodape }) {
   const toneColor = tone === "emerald" ? "var(--emerald)" : "var(--brick)";
   const toneSoft = tone === "emerald" ? "var(--emerald-soft)" : "var(--brick-soft)";
   return (
-    <div className="rz-card p-4 flex items-center justify-between gap-2">
+    // h-full + o rodapé reservado mantêm todos os cards da linha do mesmo tamanho
+    <div className="rz-card p-4 h-full flex items-center justify-between gap-2">
       <div className="min-w-0">
         <div className="text-xs mb-1 truncate" style={{ color: "var(--ink-soft)" }}>{label}</div>
         <div className="rz-mono text-lg font-semibold whitespace-nowrap" style={{ color: toneColor }}>{formatCurrency(value)}</div>
+        {rodape !== undefined && <div className="mt-1 min-h-[15px]">{rodape}</div>}
       </div>
       <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: toneSoft }}>
         <Icon size={15} style={{ color: toneColor }} />

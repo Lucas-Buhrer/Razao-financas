@@ -36,6 +36,8 @@ function VisaoGeralTab({
   }, [debts]);
 
   const patrimonio = saldoTotal + savingsTotal - totalFaturas - dividasResumo.aPagar + dividasResumo.aReceber;
+  // Sem faturas nem dívidas, "Total disponível" e "Patrimônio" seriam o mesmo número.
+  const temPassivos = totalFaturas > 0 || dividasResumo.aPagar > 0 || dividasResumo.aReceber > 0;
 
   const saldoProjetado = useMemo(() => {
     const endOfPeriod = periodMode === "todos"
@@ -58,16 +60,22 @@ function VisaoGeralTab({
 
   const pendingFixedTotal = pendingFixedBills.reduce((s, b) => s + b.amount, 0);
 
+  // Se o mês exibido ainda está correndo, compara o anterior só até o mesmo dia —
+  // senão um mês pela metade pareceria uma queda enorme.
   const mesAnterior = useMemo(() => {
+    const hoje = new Date();
+    const mesCorrente = hoje.getFullYear() === refDate.getFullYear() && hoje.getMonth() === refDate.getMonth();
+    const diaLimite = mesCorrente ? hoje.getDate() : 31;
     const d = new Date(refDate.getFullYear(), refDate.getMonth() - 1, 1);
     const doMes = transactions.filter((t) => {
       const td = new Date(t.date + "T00:00:00");
-      return td.getFullYear() === d.getFullYear() && td.getMonth() === d.getMonth();
+      return td.getFullYear() === d.getFullYear() && td.getMonth() === d.getMonth() && td.getDate() <= diaLimite;
     });
     return {
       receitas: doMes.filter((t) => t.type === "receita").reduce((s, t) => s + t.amount, 0),
       despesas: doMes.filter((t) => t.type === "despesa").reduce((s, t) => s + t.amount, 0),
       temDados: doMes.length > 0,
+      parcial: mesCorrente,
       rotulo: MONTHS[d.getMonth()].slice(0, 3) + "/" + String(d.getFullYear()).slice(2),
     };
   }, [transactions, refDate]);
@@ -175,7 +183,11 @@ function VisaoGeralTab({
     const subiu = valor >= 0;
     const bom = inverso ? !subiu : subiu;
     return (
-      <span className="rz-mono text-[11px] inline-flex items-center gap-0.5" style={{ color: bom ? "var(--emerald)" : "var(--brick)" }}>
+      <span
+        className="rz-mono text-[11px] inline-flex items-center gap-0.5"
+        style={{ color: bom ? "var(--emerald)" : "var(--brick)" }}
+        title={mesAnterior.parcial ? `Comparando com ${mesAnterior.rotulo} até o mesmo dia do mês` : `Comparando com ${mesAnterior.rotulo} fechado`}
+      >
         {subiu ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
         {Math.abs(valor).toFixed(0)}% vs {mesAnterior.rotulo}
       </span>
@@ -222,21 +234,25 @@ function VisaoGeralTab({
 
           <div className="mb-5">
             <h2 className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: "var(--ink-soft)" }}>Situação atual</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className={`grid grid-cols-1 sm:grid-cols-2 gap-3 items-stretch ${temPassivos ? "lg:grid-cols-4" : "lg:grid-cols-3"}`}>
               <button onClick={() => setActiveTab("carteira")} className="rz-focus text-left" title="Ver detalhes por conta">
-                <SummaryCard label="Saldo em contas" value={saldoTotal} icon={Wallet} tone={saldoTotal >= 0 ? "emerald" : "brick"} />
+                <SummaryCard label="Saldo em contas" value={saldoTotal} icon={Wallet} tone={saldoTotal >= 0 ? "emerald" : "brick"}
+                  rodape={<span className="text-[11px]" style={{ color: "var(--ink-soft)" }}>disponível hoje</span>} />
               </button>
               <button onClick={() => setActiveTab("poupanca")} className="rz-focus text-left" title="Ver caixinhas">
-                <SummaryCard label="Guardado em caixinhas" value={savingsTotal} icon={Landmark} tone="emerald" />
+                <SummaryCard label="Guardado em caixinhas" value={savingsTotal} icon={Landmark} tone="emerald"
+                  rodape={<span className="text-[11px]" style={{ color: "var(--ink-soft)" }}>{caixinhasAtivas.length} caixinha{caixinhasAtivas.length !== 1 ? "s" : ""}</span>} />
               </button>
-              {totalFaturas > 0 ? (
-                <button onClick={() => setActiveTab("carteira")} className="rz-focus text-left" title="Ver faturas dos cartões">
-                  <SummaryCard label="Faturas em aberto" value={totalFaturas} icon={CreditCard} tone="brick" />
+              {temPassivos && (
+                <button onClick={() => setActiveTab(totalFaturas > 0 ? "carteira" : "dividas")} className="rz-focus text-left" title="Ver o que você deve">
+                  <SummaryCard label="A pagar" value={totalFaturas + dividasResumo.aPagar} icon={CreditCard} tone="brick"
+                    rodape={<span className="text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                      {totalFaturas > 0 && "faturas"}{totalFaturas > 0 && dividasResumo.aPagar > 0 && " + "}{dividasResumo.aPagar > 0 && "dívidas"}
+                    </span>} />
                 </button>
-              ) : (
-                <SummaryCard label="Total disponível" value={saldoTotal + savingsTotal} icon={PiggyBank} tone={saldoTotal + savingsTotal >= 0 ? "emerald" : "brick"} />
               )}
-              <SummaryCard label="Patrimônio líquido" value={patrimonio} icon={Scale} tone={patrimonio >= 0 ? "emerald" : "brick"} />
+              <SummaryCard label="Patrimônio líquido" value={patrimonio} icon={Scale} tone={patrimonio >= 0 ? "emerald" : "brick"}
+                rodape={<span className="text-[11px]" style={{ color: "var(--ink-soft)" }}>tudo somado</span>} />
             </div>
             {(totalFaturas > 0 || dividasResumo.aPagar > 0 || dividasResumo.aReceber > 0) && (
               <p className="text-xs mt-2" style={{ color: "var(--ink-soft)" }}>
@@ -252,21 +268,19 @@ function VisaoGeralTab({
             <h2 className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: "var(--ink-soft)" }}>
               {periodMode === "todos" ? "Todos os períodos" : MONTHS[refDate.getMonth()] + " / " + refDate.getFullYear()}
             </h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-              <div>
-                <button onClick={() => verLancamentos({ tipo: "receita" })} className="rz-focus text-left w-full" title="Ver receitas do período">
-                  <SummaryCard label="Receitas" value={totals.receitas} icon={TrendingUp} tone="emerald" />
-                </button>
-                <div className="mt-1 pl-1"><Variacao valor={variacao(totals.receitas, mesAnterior.receitas)} /></div>
-              </div>
-              <div>
-                <button onClick={() => verLancamentos({ tipo: "despesa" })} className="rz-focus text-left w-full" title="Ver despesas do período">
-                  <SummaryCard label="Despesas" value={totals.despesas} icon={TrendingDown} tone="brick" />
-                </button>
-                <div className="mt-1 pl-1"><Variacao valor={variacao(totals.despesas, mesAnterior.despesas)} inverso /></div>
-              </div>
-              <SummaryCard label="Resultado do período" value={totals.saldo} icon={Scale} tone={totals.saldo >= 0 ? "emerald" : "brick"} />
-              <SummaryCard label="Saldo projetado ao fim" value={saldoProjetado} icon={Scale} tone={saldoProjetado >= 0 ? "emerald" : "brick"} />
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 items-stretch">
+              <button onClick={() => verLancamentos({ tipo: "receita" })} className="rz-focus text-left" title="Ver receitas do período">
+                <SummaryCard label="Receitas" value={totals.receitas} icon={TrendingUp} tone="emerald"
+                  rodape={<Variacao valor={variacao(totals.receitas, mesAnterior.receitas)} />} />
+              </button>
+              <button onClick={() => verLancamentos({ tipo: "despesa" })} className="rz-focus text-left" title="Ver despesas do período">
+                <SummaryCard label="Despesas" value={totals.despesas} icon={TrendingDown} tone="brick"
+                  rodape={<Variacao valor={variacao(totals.despesas, mesAnterior.despesas)} inverso />} />
+              </button>
+              <SummaryCard label="Resultado do período" value={totals.saldo} icon={Scale} tone={totals.saldo >= 0 ? "emerald" : "brick"}
+                rodape={<span className="text-[11px]" style={{ color: "var(--ink-soft)" }}>receitas − despesas</span>} />
+              <SummaryCard label="Saldo projetado ao fim" value={saldoProjetado} icon={Scale} tone={saldoProjetado >= 0 ? "emerald" : "brick"}
+                rodape={<span className="text-[11px]" style={{ color: "var(--ink-soft)" }}>com pendentes e fixas</span>} />
             </div>
           </div>
 
