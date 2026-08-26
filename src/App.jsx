@@ -1385,6 +1385,12 @@ export default function App() {
             saldosIniciais={saldosIniciais}
             cardIds={cardIds}
             irParaHoje={irParaHoje}
+            banksList={banksList}
+            budgets={budgets}
+            debts={debts}
+            setTypeFilter={setTypeFilter}
+            setCategoryFilter={setCategoryFilter}
+            setAccountFilter={setAccountFilter}
           />
         ) : activeTab === "dividas" ? (
           <DividasTab
