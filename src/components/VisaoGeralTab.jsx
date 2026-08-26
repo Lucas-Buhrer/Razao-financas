@@ -47,14 +47,14 @@ function VisaoGeralTab({
       .filter((t) => t.status === "pendente" && new Date(t.date + "T00:00:00") <= endOfPeriod)
       .reduce((s, t) => s + efeitoNoSaldoGeral(t, cardIds), 0);
     const fixasNaoLancadas = periodMode === "todos" ? 0 : enrichFixedBills(fixedBills, transactions, refDate)
-      .filter((b) => b.active && b.status !== "lancada")
+      .filter((b) => b.active && b.status !== "lancada" && b.aplicaNesteMes)
       .reduce((s, b) => s + (b.type === "receita" ? b.amount : -b.amount), 0);
     return saldoTotal + pendentes + fixasNaoLancadas;
   }, [transactions, fixedBills, refDate, periodMode, saldoTotal, cardIds]);
 
   const pendingFixedBills = useMemo(() => {
     return enrichFixedBills(fixedBills, transactions, refDate)
-      .filter((b) => b.active && b.type === "despesa" && b.status !== "lancada")
+      .filter((b) => b.active && b.type === "despesa" && b.status !== "lancada" && b.aplicaNesteMes)
       .sort((a, b) => a.day - b.day);
   }, [fixedBills, transactions, refDate]);
 
@@ -128,7 +128,7 @@ function VisaoGeralTab({
     const limite = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate() + 15);
     const itens = [];
     enrichFixedBills(fixedBills, transactions, refDate)
-      .filter((b) => b.active && b.type === "despesa" && b.status !== "lancada")
+      .filter((b) => b.active && b.type === "despesa" && b.status !== "lancada" && b.aplicaNesteMes)
       .forEach((b) => {
         const d = new Date(refDate.getFullYear(), refDate.getMonth(), b.day);
         if (d >= hoje && d <= limite) itens.push({ id: "fx" + b.id, data: d, label: b.description, valor: b.amount, tipo: "Conta fixa" });

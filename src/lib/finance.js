@@ -101,7 +101,7 @@ export function buildCashFlowProjection(transactions, fixedBills, horizonDays, s
   for (let i = 0; i < monthsToScan; i++) {
     const monthDate = new Date(today.getFullYear(), today.getMonth() + i, 1);
     const period = periodKeyOf(monthDate);
-    fixedBills.filter((b) => b.active).forEach((bill) => {
+    fixedBills.filter((b) => b.active && billAppliesTo(b, monthDate)).forEach((bill) => {
       const already = transactions.some((t) => t.recurringId === bill.id && t.recurringPeriod === period);
       if (already) return;
       const daysInMonth = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0).getDate();
@@ -134,6 +134,42 @@ export function buildCashFlowProjection(transactions, fixedBills, horizonDays, s
   return { baseline, final: dailyBalances[dailyBalances.length - 1].saldo, totalIn, totalOut, chartData };
 }
 
+// Quantos meses de intervalo entre uma cobrança e a próxima.
+export const FREQUENCIAS = {
+  mensal: { label: "Mensal", meses: 1 },
+  bimestral: { label: "Bimestral", meses: 2 },
+  trimestral: { label: "Trimestral", meses: 3 },
+  semestral: { label: "Semestral", meses: 6 },
+  anual: { label: "Anual", meses: 12 },
+};
+
+const mesesEntre = (deA, paraB) => {
+  const [ay, am] = deA.split("-").map(Number);
+  const [by, bm] = paraB.split("-").map(Number);
+  return (by - ay) * 12 + (bm - am);
+};
+
+// Diz se a conta fixa é cobrada no mês de referência, considerando
+// periodicidade, mês de início e mês de término.
+export function billAppliesTo(bill, refDate) {
+  const period = periodKeyOf(refDate);
+  if (bill.endPeriod && period > bill.endPeriod) return false;
+  const inicio = bill.startPeriod || (bill.amountHistory && bill.amountHistory[0]?.period) || null;
+  if (inicio && inicio !== "0000-01" && period < inicio) return false;
+
+  const freq = FREQUENCIAS[bill.frequency] || FREQUENCIAS.mensal;
+  if (freq.meses === 1) return true;
+  if (!inicio || inicio === "0000-01") return true;
+  const diff = mesesEntre(inicio, period);
+  return diff >= 0 && diff % freq.meses === 0;
+}
+
+// Custo médio mensal, para somar contas de periodicidades diferentes.
+export function custoMensalEquivalente(bill, valor) {
+  const freq = FREQUENCIAS[bill.frequency] || FREQUENCIAS.mensal;
+  return valor / freq.meses;
+}
+
 export function enrichFixedBills(fixedBills, transactions, refDate) {
   const periodKey = periodKeyOf(refDate);
   const daysInMonth = new Date(refDate.getFullYear(), refDate.getMonth() + 1, 0).getDate();
@@ -146,6 +182,6 @@ export function enrichFixedBills(fixedBills, transactions, refDate) {
     if (launchedTx) status = "lancada";
     else if (dueDate < today) status = "atrasada";
     else if ((dueDate - today) / 86400000 <= 5) status = "vencendo";
-    return { ...bill, amount: getAmountForPeriod(bill, refDate), day, launchedTx, status };
+    return { ...bill, amount: getAmountForPeriod(bill, refDate), day, dueDate, launchedTx, status, aplicaNesteMes: billAppliesTo(bill, refDate) };
   });
 }

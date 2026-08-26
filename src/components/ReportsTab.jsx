@@ -3,7 +3,7 @@ import { Receipt, Scale, TrendingDown, TrendingUp } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { MONTHS } from "../lib/constants";
 import { formatCompact, formatCurrency, formatDateBR, todayISO } from "../lib/format";
-import { buildCashFlowProjection, getAmountForPeriod } from "../lib/finance";
+import { buildCashFlowProjection, getAmountForPeriod, custoMensalEquivalente, periodKeyOf } from "../lib/finance";
 import { RetroLinha, SummaryCard } from "./common";
 
 function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, saldosIniciais, budgets, categoriesByType, banksList, findBank, cardIds }) {
@@ -71,10 +71,12 @@ function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, s
       ? ((totalReceitas - totalDespesas) / totalReceitas) * 100
       : null;
 
-    // Comprometimento: total de contas fixas ativas sobre a receita média
+    // Comprometimento: contas fixas ativas sobre a receita média. Contas anuais
+    // e semestrais entram pelo custo mensal equivalente, não pelo valor cheio.
     const totalFixas = fixedBills
       .filter((b) => b.active && b.type === "despesa")
-      .reduce((s, b) => s + getAmountForPeriod(b, new Date()), 0);
+      .filter((b) => !b.endPeriod || b.endPeriod >= periodKeyOf(new Date()))
+      .reduce((s, b) => s + custoMensalEquivalente(b, getAmountForPeriod(b, new Date())), 0);
     const comprometimento = receitaMedia > 0 ? (totalFixas / receitaMedia) * 100 : null;
 
     return { receitaMedia, despesaMedia, taxaPoupanca, totalReceitas, totalDespesas, totalFixas, comprometimento };

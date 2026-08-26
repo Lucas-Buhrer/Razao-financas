@@ -713,16 +713,20 @@ export default function App() {
   };
 
   const handleLaunchAllPendingBills = () => {
-    const pendentes = enrichFixedBills(fixedBills, transactions, refDate).filter((b) => b.active && b.status !== "lancada");
+    const pendentes = enrichFixedBills(fixedBills, transactions, refDate)
+      .filter((b) => b.active && b.status !== "lancada" && b.aplicaNesteMes);
     if (pendentes.length === 0) return;
     const daysInMonth = new Date(refDate.getFullYear(), refDate.getMonth() + 1, 0).getDate();
     const period = periodKeyOf(refDate);
+    const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
     const novos = pendentes.map((bill) => {
       const day = Math.min(bill.dueDay, daysInMonth);
+      const vencimento = new Date(refDate.getFullYear(), refDate.getMonth(), day);
       return {
         id: uid(), description: bill.description, amount: bill.amount,
         date: `${refDate.getFullYear()}-${String(refDate.getMonth() + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
-        type: bill.type, category: bill.category, account: bill.account, status: "pago",
+        type: bill.type, category: bill.category, account: bill.account,
+        status: vencimento > hoje ? "pendente" : "pago",
         recurringId: bill.id, recurringPeriod: period, createdBy: currentUserEmail,
       };
     });
@@ -1026,7 +1030,11 @@ export default function App() {
   const resetFixedForm = () => { setFixedForm(emptyFixedForm); setEditingFixedId(null); setFixedFormError(""); };
   const openNewFixedForm = () => { resetFixedForm(); setShowFixedForm(true); };
   const openEditFixedForm = (bill) => {
-    setFixedForm({ description: bill.description, amount: String(getAmountForPeriod(bill, refDate)), type: bill.type, category: bill.category, account: bill.account || "", dueDay: String(bill.dueDay) });
+    setFixedForm({
+      description: bill.description, amount: String(getAmountForPeriod(bill, refDate)),
+      type: bill.type, category: bill.category, account: bill.account || "", dueDay: String(bill.dueDay),
+      frequency: bill.frequency || "mensal", endPeriod: bill.endPeriod || "",
+    });
     setEditingFixedId(bill.id);
     setShowFixedForm(true);
   };
@@ -1057,17 +1065,35 @@ export default function App() {
           category: fixedForm.category,
           account: fixedForm.account,
           dueDay: dayNum,
+          frequency: fixedForm.frequency || "mensal",
+          endPeriod: fixedForm.endPeriod || "",
           amountHistory,
         };
       }));
     } else {
       setFixedBills((prev) => [...prev, {
         id: uid(), description: fixedForm.description, type: fixedForm.type, category: fixedForm.category,
-        account: fixedForm.account, dueDay: dayNum, active: true, amountHistory: [{ period, amount: amountNum }],
+        account: fixedForm.account, dueDay: dayNum, active: true,
+        frequency: fixedForm.frequency || "mensal",
+        startPeriod: period,
+        endPeriod: fixedForm.endPeriod || "",
+        amountHistory: [{ period, amount: amountNum }],
       }]);
     }
     setShowFixedForm(false);
     resetFixedForm();
+  };
+
+  const handleDuplicateFixed = (bill) => {
+    const period = periodKeyOf(new Date());
+    setFixedBills((prev) => [...prev, {
+      ...bill,
+      id: uid(),
+      description: `${bill.description} (cópia)`,
+      startPeriod: period,
+      amountHistory: [{ period, amount: getAmountForPeriod(bill, new Date()) }],
+    }]);
+    setToast({ message: `"${bill.description}" duplicada.` });
   };
 
   const handleDeleteFixed = (bill) => {
@@ -1078,13 +1104,23 @@ export default function App() {
     setFixedBills((prev) => prev.map((b) => (b.id === bill.id ? { ...b, active: !b.active } : b)));
   };
 
-  const handleLaunchFixedBill = (bill) => {
+  // valorAjustado permite corrigir contas que variam (energia, água) sem
+  // alterar o valor cadastrado dos próximos meses.
+  const handleLaunchFixedBill = (bill, valorAjustado, statusEscolhido) => {
     const daysInMonth = new Date(refDate.getFullYear(), refDate.getMonth() + 1, 0).getDate();
     const day = Math.min(bill.dueDay, daysInMonth);
     const dateISO = `${refDate.getFullYear()}-${String(refDate.getMonth() + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+
+    // Se a data ainda não chegou, o dinheiro não saiu: entra como pendente.
+    const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+    const vencimento = new Date(refDate.getFullYear(), refDate.getMonth(), day);
+    const statusPadrao = vencimento > hoje ? "pendente" : "pago";
+
+    const valor = valorAjustado !== undefined && valorAjustado !== null ? valorAjustado : bill.amount;
     const newTx = {
-      id: uid(), description: bill.description, amount: bill.amount, date: dateISO,
-      type: bill.type, category: bill.category, account: bill.account, status: "pago",
+      id: uid(), description: bill.description, amount: valor, date: dateISO,
+      type: bill.type, category: bill.category, account: bill.account,
+      status: statusEscolhido || statusPadrao,
       recurringId: bill.id, recurringPeriod: periodKeyOf(refDate), createdBy: currentUserEmail,
     };
     setTransactions((prev) => [...prev, newTx]);
@@ -1511,6 +1547,7 @@ export default function App() {
             findCategory={findCategory}
             findBank={findBank}
             onLaunch={handleLaunchFixedBill}
+            onDuplicate={handleDuplicateFixed}
             onLaunchAll={handleLaunchAllPendingBills}
             onUndoLaunch={handleUndoLaunchFixedBill}
             onToggleActive={handleToggleActiveFixed}
