@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import { BookOpen, Receipt, Plus, Trash2, Pencil, X, Check, Search, TrendingUp, TrendingDown, Scale, Undo2, Menu, LogOut, FileUp, FileDown, Copy, Paperclip, Loader2, Layers } from "lucide-react";
+import { BookOpen, Receipt, Plus, Trash2, Pencil, X, Check, Search, TrendingUp, TrendingDown, Scale, Undo2, Menu, LogOut, FileUp, FileDown, Copy, Paperclip, Loader2, Layers, Repeat } from "lucide-react";
 import { storage } from "./storage";
 import { supabase } from "./supabaseClient";
 import { uploadReceipt, getReceiptUrl, deleteReceipt } from "./receipts";
@@ -96,6 +96,7 @@ export default function App() {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [pendingId, setPendingId] = useState(null);
+  const [aplicarNasParcelas, setAplicarNasParcelas] = useState(false);
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
   const [formError, setFormError] = useState("");
 
@@ -104,6 +105,7 @@ export default function App() {
   const [categoryFilter, setCategoryFilter] = useState("todas");
   const [accountFilter, setAccountFilter] = useState("todas");
   const [sortBy, setSortBy] = useState("data-desc");
+  const [filtrosCarregados, setFiltrosCarregados] = useState(false);
   const [selecionados, setSelecionados] = useState([]);
   const [periodMode, setPeriodMode] = useState("mes");
   const [refDate, setRefDate] = useState(new Date());
@@ -433,6 +435,32 @@ export default function App() {
     })();
   }, [debts, debtsLoaded]);
 
+  // ---------- Lembra os filtros da aba Lançamentos ----------
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await storage.get("filtros_lancamentos", false);
+        if (res && res.value) {
+          const f = JSON.parse(res.value);
+          if (f.typeFilter) setTypeFilter(f.typeFilter);
+          if (f.categoryFilter) setCategoryFilter(f.categoryFilter);
+          if (f.accountFilter) setAccountFilter(f.accountFilter);
+          if (f.sortBy) setSortBy(f.sortBy);
+        }
+      } catch (e) { /* ainda não existe */ }
+      finally { setFiltrosCarregados(true); }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!filtrosCarregados) return;
+    (async () => {
+      try {
+        await storage.set("filtros_lancamentos", JSON.stringify({ typeFilter, categoryFilter, accountFilter, sortBy }), false);
+      } catch (e) { /* falha silenciosa: filtro não é dado crítico */ }
+    })();
+  }, [typeFilter, categoryFilter, accountFilter, sortBy, filtrosCarregados]);
+
   // ---------- Toast auto-dismiss ----------
   useEffect(() => {
     if (!toast) return;
@@ -516,7 +544,8 @@ export default function App() {
   const totals = useMemo(() => {
     const receitas = visibleTransactions.filter((t) => t.type === "receita").reduce((s, t) => s + Number(t.amount), 0);
     const despesas = visibleTransactions.filter((t) => t.type === "despesa").reduce((s, t) => s + Number(t.amount), 0);
-    return { receitas, despesas, saldo: receitas - despesas };
+    const transferido = visibleTransactions.filter((t) => t.type === "transferencia").reduce((s, t) => s + Number(t.amount), 0);
+    return { receitas, despesas, transferido, saldo: receitas - despesas };
   }, [visibleTransactions]);
 
   const totalsPeriodo = useMemo(() => {
@@ -538,6 +567,7 @@ export default function App() {
       attachmentPath: t.attachmentPath || null, attachmentName: t.attachmentName || "",
     });
     setEditingId(t.id);
+    setAplicarNasParcelas(false);
     setShowForm(true);
   };
 
@@ -663,7 +693,17 @@ export default function App() {
     }
 
     if (editingId) {
-      setTransactions((prev) => prev.map((t) => (t.id === editingId ? { ...t, ...form, amount: amountNum } : t)));
+      const original = transactions.find((t) => t.id === editingId);
+      const grupo = aplicarNasParcelas && original?.installmentGroupId ? original.installmentGroupId : null;
+      setTransactions((prev) => prev.map((t) => {
+        if (t.id === editingId) return { ...t, ...form, amount: amountNum };
+        // Nas outras parcelas, muda só categoria e conta — descrição, valor e
+        // data são específicos de cada uma.
+        if (grupo && t.installmentGroupId === grupo) {
+          return { ...t, category: form.category, account: form.account };
+        }
+        return t;
+      }));
     } else {
       setTransactions((prev) => [...prev, { id: pendingId || uid(), ...form, amount: amountNum, createdBy: currentUserEmail }]);
       checkBudgetAlert(form.category, form.type, form.date, amountNum, form.account);
@@ -842,6 +882,12 @@ export default function App() {
 
   const toggleSelecionado = (id) => {
     setSelecionados((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
+  const filtrosAtivos = typeFilter !== "todos" || categoryFilter !== "todas" || accountFilter !== "todas" || search.trim() !== "";
+
+  const limparFiltros = () => {
+    setTypeFilter("todos"); setCategoryFilter("todas"); setAccountFilter("todas"); setSearch("");
   };
 
   const handleTogglePaid = (t) => {
@@ -1480,9 +1526,22 @@ export default function App() {
 
             {/* Summary cards */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
-              <SummaryCard label="Receitas" value={totals.receitas} icon={TrendingUp} tone="emerald" />
-              <SummaryCard label="Despesas" value={totals.despesas} icon={TrendingDown} tone="brick" />
-              <SummaryCard label="Saldo do período" value={totals.saldo} icon={Scale} tone={totals.saldo >= 0 ? "emerald" : "brick"} />
+              {typeFilter === "transferencia" ? (
+                <>
+                  <SummaryCard label="Total movimentado" value={totals.transferido} icon={Repeat} tone="emerald" />
+                  <div className="rz-card p-4 flex items-center justify-between gap-2 sm:col-span-2">
+                    <p className="text-xs" style={{ color: "var(--ink-soft)" }}>
+                      Transferências movem dinheiro entre seus próprios lugares — não entram como receita nem despesa.
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <SummaryCard label="Receitas" value={totals.receitas} icon={TrendingUp} tone="emerald" />
+                  <SummaryCard label="Despesas" value={totals.despesas} icon={TrendingDown} tone="brick" />
+                  <SummaryCard label="Saldo do período" value={totals.saldo} icon={Scale} tone={totals.saldo >= 0 ? "emerald" : "brick"} />
+                </>
+              )}
             </div>
 
             {/* Busca e filtros */}
@@ -1530,9 +1589,16 @@ export default function App() {
               </select>
             </div>
 
-            <div className="text-xs mb-2" style={{ color: "var(--ink-soft)" }}>
-              {visibleTransactions.length} lançamento{visibleTransactions.length !== 1 ? "s" : ""}
-              {visibleTransactions.length !== periodFiltered.length && ` de ${periodFiltered.length} no período`}
+            <div className="flex items-center gap-3 mb-2 flex-wrap">
+              <span className="text-xs" style={{ color: "var(--ink-soft)" }}>
+                {visibleTransactions.length} lançamento{visibleTransactions.length !== 1 ? "s" : ""}
+                {visibleTransactions.length !== periodFiltered.length && ` de ${periodFiltered.length} no período`}
+              </span>
+              {filtrosAtivos && (
+                <button onClick={limparFiltros} className="rz-focus text-xs flex items-center gap-1" style={{ color: "var(--emerald)" }} title="Voltar a mostrar tudo">
+                  <X size={12} /> Limpar filtros
+                </button>
+              )}
             </div>
 
             {/* Ações */}
@@ -1555,13 +1621,13 @@ export default function App() {
             {selecionados.length > 0 && (
               <div className="rz-card p-3 mb-4 flex items-center gap-2 flex-wrap" style={{ borderColor: "var(--emerald)" }}>
                 <span className="text-sm font-medium">{selecionados.length} selecionado{selecionados.length !== 1 ? "s" : ""}</span>
-                <select className="rz-input rz-focus text-xs" style={{ width: "auto" }} value="" onChange={(e) => handleBulkCategory(e.target.value)}>
+                <select className="rz-input rz-focus text-xs" style={{ width: "auto" }} value="" onChange={(e) => { if (e.target.value) handleBulkCategory(e.target.value); }}>
                   <option value="">Mudar categoria…</option>
                   {[...categoriesByType.receita, ...categoriesByType.despesa].map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
                 </select>
-                <select className="rz-input rz-focus text-xs" style={{ width: "auto" }} value="" onChange={(e) => handleBulkAccount(e.target.value)}>
+                <select className="rz-input rz-focus text-xs" style={{ width: "auto" }} value="" onChange={(e) => { if (e.target.value) handleBulkAccount(e.target.value === "__nenhuma__" ? "" : e.target.value); }}>
                   <option value="">Mudar conta…</option>
-                  <option value="">Nenhuma</option>
+                  <option value="__nenhuma__">Nenhuma (limpar)</option>
                   {banksList.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
                 </select>
                 <button onClick={() => handleBulkPaid("pago")} className="rz-btn-ghost rz-focus text-xs !py-1.5 !px-3">Marcar pago</button>
@@ -1601,11 +1667,15 @@ export default function App() {
                 <p className="text-sm mb-4" style={{ color: "var(--ink-soft)" }}>
                   {transactions.length === 0 ? "Comece registrando sua primeira receita ou despesa." : "Nada bate com os filtros atuais — tente ajustá-los."}
                 </p>
-                {transactions.length === 0 && (
+                {transactions.length === 0 ? (
                   <button onClick={openNewForm} className="rz-btn-primary rz-focus text-sm inline-flex items-center gap-2">
                     <Plus size={16} /> Adicionar lançamento
                   </button>
-                )}
+                ) : filtrosAtivos ? (
+                  <button onClick={limparFiltros} className="rz-btn-primary rz-focus text-sm inline-flex items-center gap-2">
+                    <X size={16} /> Limpar filtros
+                  </button>
+                ) : null}
               </div>
             ) : (
               <div className="rz-card overflow-hidden">
@@ -1630,12 +1700,24 @@ export default function App() {
                   const ehTransf = t.type === "transferencia";
                   const cat = ehTransf ? { label: "Transferência", color: "var(--ink-soft)" } : findCategory(t.type, t.category);
                   const bank = t.account ? findBank(t.account) : null;
-                  const bankTo = t.toAccount ? findBank(t.toAccount) : null;
+                  // Transferência pode envolver contas (account/toAccount) ou
+                  // caixinhas (fromBox/toBox) — resolve o nome nos dois casos.
+                  const nomeLugar = (contaId, boxId) => {
+                    if (contaId) return findBank(contaId)?.label || "conta";
+                    if (boxId) return savingsAccounts.find((b) => b.id === boxId)?.label || "caixinha";
+                    return "?";
+                  };
                   const subtitulo = ehTransf
-                    ? `${bank ? bank.label : "?"} → ${bankTo ? bankTo.label : "?"}`
+                    ? `${nomeLugar(t.account, t.fromBox)} → ${nomeLugar(t.toAccount, t.toBox)}`
                     : `${cat.label}${bank ? ` · ${bank.label}` : ""}`;
                   const corValor = ehTransf ? "var(--ink-soft)" : (t.type === "receita" ? "var(--emerald)" : "var(--brick)");
                   const selecionado = selecionados.includes(t.id);
+                  const ehFuturo = t.date > todayISO();
+                  const futuroTag = ehFuturo ? (
+                    <span className="rz-mono text-[9px] px-1.5 py-0.5 rounded shrink-0" style={{ background: "var(--gold-soft)", color: "var(--gold)" }} title="Data ainda não chegou">
+                      FUTURO
+                    </span>
+                  ) : null;
                   const checkbox = (
                     <button
                       onClick={() => toggleSelecionado(t.id)}
@@ -1709,8 +1791,26 @@ export default function App() {
                     </div>
                   );
 
+                  const anterior = i > 0 ? visibleTransactions[i - 1] : null;
+                  const mostrarSeparador = sortBy.startsWith("data") && (!anterior || anterior.date !== t.date);
+
                   return (
-                    <div key={t.id} style={{ borderTop: i === 0 ? "none" : "1px solid var(--line)" }}>
+                    <div key={t.id} style={{ borderTop: i === 0 || mostrarSeparador ? "none" : "1px solid var(--line)" }}>
+                      {mostrarSeparador && (
+                        <div className="px-4 py-1.5 flex items-center justify-between gap-2" style={{ background: "var(--paper-alt)", borderTop: i === 0 ? "none" : "1px solid var(--line)" }}>
+                          <span className="rz-mono text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                            {formatDateBR(t.date)}
+                            {t.date === todayISO() && <span style={{ color: "var(--emerald)" }}> · hoje</span>}
+                          </span>
+                          <span className="rz-mono text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                            {(() => {
+                              const doDia = visibleTransactions.filter((x) => x.date === t.date && x.type !== "transferencia");
+                              const liquido = doDia.reduce((s, x) => s + (x.type === "receita" ? x.amount : -x.amount), 0);
+                              return liquido === 0 ? "" : formatCurrency(liquido);
+                            })()}
+                          </span>
+                        </div>
+                      )}
                       {/* Mobile layout */}
                       <div className="flex flex-col gap-2 px-4 py-3 sm:hidden">
                         <div className="flex items-center gap-2 min-w-0">
@@ -1720,6 +1820,7 @@ export default function App() {
                             <div className="flex items-center gap-1.5 min-w-0">
                               <span className="text-sm font-medium truncate">{t.installmentTotal ? t.description.replace(/ \(\d+\/\d+\)$/, "") : t.description}</span>
                               {parcelaTag}
+                              {futuroTag}
                             </div>
                             <div className="text-xs" style={{ color: "var(--ink-soft)" }}>{subtitulo}</div>
                           </div>
@@ -1751,6 +1852,7 @@ export default function App() {
                             <div className="flex items-center gap-1.5 min-w-0">
                               <span className="text-sm font-medium truncate">{t.installmentTotal ? t.description.replace(/ \(\d+\/\d+\)$/, "") : t.description}</span>
                               {parcelaTag}
+                              {futuroTag}
                             </div>
                             <div className="text-xs" style={{ color: "var(--ink-soft)" }}>{subtitulo}</div>
                           </div>
@@ -1930,6 +2032,32 @@ export default function App() {
                   </label>
                 )}
               </div>
+
+              {editingId && (() => {
+                const orig = transactions.find((t) => t.id === editingId);
+                if (!orig?.installmentGroupId) return null;
+                return (
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => setAplicarNasParcelas((v) => !v)}
+                      className="rz-focus flex items-center gap-2 text-sm"
+                    >
+                      <span style={{
+                        width: 16, height: 16, borderRadius: 4, border: "1.5px solid var(--line)",
+                        background: aplicarNasParcelas ? "var(--ink)" : "var(--surface)",
+                        display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                      }}>
+                        {aplicarNasParcelas && <Check size={12} color="var(--paper)" />}
+                      </span>
+                      Aplicar às {orig.installmentTotal} parcelas
+                    </button>
+                    <p className="text-xs mt-1" style={{ color: "var(--ink-soft)" }}>
+                      Muda categoria e conta em todas. Descrição, valor e data continuam individuais.
+                    </p>
+                  </div>
+                );
+              })()}
 
               {formError && <div className="text-xs" style={{ color: "var(--brick)" }}>{formError}</div>}
 
