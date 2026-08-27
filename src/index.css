@@ -34,6 +34,27 @@
 
         .rz-app[data-dark="true"] { --surface: color-mix(in srgb, var(--paper), white 8%); }
         .rz-card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+
+        /* Qualquer card dentro de um botão é clicável: ganha resposta ao mouse.
+           Sutil de propósito — o card sobe 1px e a borda escurece um pouco. */
+        button > .rz-card,
+        a > .rz-card {
+          transition: transform .12s ease, border-color .12s ease, box-shadow .12s ease;
+        }
+        button:hover > .rz-card,
+        a:hover > .rz-card {
+          transform: translateY(-1px);
+          border-color: color-mix(in srgb, var(--line), var(--ink) 35%);
+          box-shadow: 0 2px 8px color-mix(in srgb, var(--ink), transparent 88%);
+        }
+        button:active > .rz-card,
+        a:active > .rz-card { transform: translateY(0); }
+        button:focus-visible > .rz-card,
+        a:focus-visible > .rz-card { border-color: var(--emerald); }
+
+        /* O botão não deve herdar o foco padrão quando o card já responde */
+        button:has(> .rz-card) { display: block; width: 100%; text-align: left; cursor: pointer; }
+        button:has(> .rz-card):focus-visible { outline: none; }
         .rz-ruled {
           background-image: repeating-linear-gradient(to bottom, transparent, transparent 47px, var(--line) 48px);
           background-position: 0 4px;

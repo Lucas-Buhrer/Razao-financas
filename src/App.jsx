@@ -1445,7 +1445,7 @@ export default function App() {
 
       {/* ---------------- Main ---------------- */}
       <main className="flex-1 p-5 md:p-10 max-w-6xl w-full mx-auto">
-        {!loaded ? (
+        {!loaded || !filtrosCarregados ? (
           <div className="flex items-center gap-3 mt-20 justify-center" style={{ color: "var(--ink-soft)" }}>
             <div className="rz-mono text-sm">Carregando seus dados…</div>
           </div>
