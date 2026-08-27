@@ -4,9 +4,9 @@ import { storage } from "./storage";
 import { supabase } from "./supabaseClient";
 import { uploadReceipt, getReceiptUrl, deleteReceipt } from "./receipts";
 import { CATEGORIES, DEFAULT_BANKS, NAV_ITEMS, COLOR_PALETTE, DEFAULT_SAVINGS_SEED, DEFAULT_THEME, emptyForm, emptyFixedForm, emptyDebtForm } from "./lib/constants";
-import { uid, todayISO, formatCurrency, formatDateBR, colorForEmail, isDarkTheme } from "./lib/format";
-import { downloadCsv, chaveDuplicata, buildCategoryMemory, addMonthsToDateISO } from "./lib/csv";
-import { periodKeyOf, getAmountForPeriod, enrichFixedBills, billAppliesTo } from "./lib/finance";
+import { uid, todayISO, formatCurrency, formatDateBR, dateToISO, colorForEmail, isDarkTheme } from "./lib/format";
+import { downloadCsv, chaveDuplicata, buildCategoryMemory, normalizeDesc, addMonthsToDateISO } from "./lib/csv";
+import { periodKeyOf, getAmountForPeriod, enrichFixedBills, billAppliesTo, cicloDaFatura } from "./lib/finance";
 import { SummaryCard, PeriodNavigator, PlaceholderTab } from "./components/common";
 import { VisaoGeralTab } from "./components/VisaoGeralTab";
 import { FixedBillsTab } from "./components/FixedBillsTab";
@@ -99,6 +99,13 @@ export default function App() {
   const [aplicarNasParcelas, setAplicarNasParcelas] = useState(false);
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
   const [formError, setFormError] = useState("");
+  // Criação de categoria sem sair do modal de lançamento
+  const [showInlineCategory, setShowInlineCategory] = useState(false);
+  const [inlineCategoryForm, setInlineCategoryForm] = useState({ label: "", color: COLOR_PALETTE[0] });
+  const [inlineCategoryError, setInlineCategoryError] = useState("");
+  // Enquanto o usuário não mexer no status, ele acompanha a data escolhida
+  const [statusTocado, setStatusTocado] = useState(false);
+  const [duplicataConfirmada, setDuplicataConfirmada] = useState(false);
 
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("todos");
@@ -544,6 +551,61 @@ export default function App() {
 
   const chavesExistentes = useMemo(() => new Set(transactions.map(chaveDuplicata)), [transactions]);
 
+  // Categoria sugerida pela descrição, usando o mesmo aprendizado da importação
+  // de CSV. Só sugere se a categoria ainda existir e for do tipo certo.
+  const categoriaSugerida = useMemo(() => {
+    if (form.type === "transferencia" || form.category) return null;
+    const chave = normalizeDesc(form.description);
+    if (!chave) return null;
+    const lembrado = categoryMemory[chave];
+    if (!lembrado || lembrado.tipo !== form.type) return null;
+    const cat = categoriesByType[form.type].find((c) => c.id === lembrado.catId);
+    return cat || null;
+  }, [form.description, form.type, form.category, categoryMemory, categoriesByType]);
+
+  // Mesma chave usada na importação (data + valor + início da descrição).
+  const duplicataDetectada = useMemo(() => {
+    if (editingId) return null;
+    const valor = parseFloat(String(form.amount).replace(",", "."));
+    if (!form.description.trim() || !valor || valor <= 0 || !form.date) return null;
+    const chave = chaveDuplicata({ date: form.date, amount: valor, description: form.description });
+    if (!chavesExistentes.has(chave)) return null;
+    return transactions.find((t) => chaveDuplicata(t) === chave) || null;
+  }, [form.description, form.amount, form.date, editingId, chavesExistentes, transactions]);
+
+  // Compra no cartão não baixa saldo — mostra em qual fatura ela cai.
+  const faturaDaCompra = useMemo(() => {
+    if (form.type !== "despesa" || !form.account || !form.date) return null;
+    if (!cardIds.has(form.account)) return null;
+    const cartao = banksList.find((b) => b.id === form.account);
+    if (!cartao) return null;
+    const compra = new Date(form.date + "T00:00:00");
+    // Se a compra caiu depois do fechamento do mês dela, entra na fatura seguinte.
+    const cicloDoMes = cicloDaFatura(cartao, compra);
+    const refFatura = compra > cicloDoMes.fim
+      ? new Date(compra.getFullYear(), compra.getMonth() + 1, 1)
+      : compra;
+    const { fim } = cicloDaFatura(cartao, refFatura);
+    return { cartao, fechamento: fim };
+  }, [form.type, form.account, form.date, cardIds, banksList]);
+
+  // Quanto do orçamento da categoria este lançamento consome.
+  const orcamentoDaCategoria = useMemo(() => {
+    if (form.type !== "despesa" || !form.category || !form.date) return null;
+    const orc = budgets.find((b) => b.kind !== "conta" && b.categoryId === form.category);
+    if (!orc || !orc.limit) return null;
+    const d = new Date(form.date + "T00:00:00");
+    const gasto = transactions
+      .filter((t) => t.type === "despesa" && t.category === form.category && t.id !== editingId)
+      .filter((t) => {
+        const td = new Date(t.date + "T00:00:00");
+        return td.getFullYear() === d.getFullYear() && td.getMonth() === d.getMonth();
+      })
+      .reduce((s, t) => s + Number(t.amount), 0);
+    const valor = parseFloat(String(form.amount).replace(",", ".")) || 0;
+    return { limite: orc.limit, gasto, comEste: gasto + valor };
+  }, [form.type, form.category, form.date, form.amount, budgets, transactions, editingId]);
+
   const periodFiltered = useMemo(() => {
     if (periodMode === "todos") return transactions;
     const y = refDate.getFullYear(), m = refDate.getMonth();
@@ -599,9 +661,41 @@ export default function App() {
   }, [periodFiltered]);
 
   // ---------- Handlers ----------
-  const resetForm = () => { setForm(emptyForm); setEditingId(null); setFormError(""); };
+  const resetForm = () => {
+    setForm(emptyForm);
+    setEditingId(null);
+    setFormError("");
+    setShowInlineCategory(false);
+    setInlineCategoryForm({ label: "", color: COLOR_PALETTE[0] });
+    setInlineCategoryError("");
+    setStatusTocado(false);
+    setDuplicataConfirmada(false);
+  };
 
   const openNewForm = () => { resetForm(); setPendingId(uid()); setShowForm(true); };
+
+  // Status acompanha a data enquanto o usuário não escolher manualmente:
+  // data no futuro entra como pendente, data de hoje ou passada como pago.
+  const handleDateChange = (novaData) => {
+    setForm((f) => {
+      if (statusTocado || editingId || !novaData) return { ...f, date: novaData };
+      return { ...f, date: novaData, status: novaData > todayISO() ? "pendente" : "pago" };
+    });
+  };
+
+  const handleAddInlineCategory = () => {
+    const label = inlineCategoryForm.label.trim();
+    if (!label) { setInlineCategoryError("Dê um nome para a categoria."); return; }
+    const jaExiste = [...categoriesByType.receita, ...categoriesByType.despesa]
+      .some((c) => c.label.toLowerCase() === label.toLowerCase());
+    if (jaExiste) { setInlineCategoryError("Já existe uma categoria com esse nome."); return; }
+    const nova = { id: `custom_${uid()}`, label, type: form.type, color: inlineCategoryForm.color };
+    setCustomCategories((prev) => [...prev, nova]);
+    setForm((f) => ({ ...f, category: nova.id }));
+    setInlineCategoryForm({ label: "", color: COLOR_PALETTE[0] });
+    setInlineCategoryError("");
+    setShowInlineCategory(false);
+  };
 
   const openEditForm = (t) => {
     setForm({
@@ -612,6 +706,9 @@ export default function App() {
     });
     setEditingId(t.id);
     setAplicarNasParcelas(false);
+    setStatusTocado(true);      // não mexer no status de um lançamento existente
+    setDuplicataConfirmada(false);
+    setShowInlineCategory(false);
     setShowForm(true);
   };
 
@@ -622,6 +719,8 @@ export default function App() {
       installments: type === "despesa" ? f.installments : false,
       toAccount: type === "transferencia" ? f.toAccount : "",
     }));
+    setShowInlineCategory(false);
+    setInlineCategoryError("");
   };
 
   const handleAttachmentSelected = async (file) => {
@@ -690,6 +789,12 @@ export default function App() {
     if (!form.description.trim()) { setFormError("Dê uma descrição para o lançamento."); return; }
     if (!amountNum || amountNum <= 0) { setFormError("Informe um valor maior que zero."); return; }
     if (!form.date) { setFormError("Selecione uma data."); return; }
+
+    // Pede uma confirmação antes de gravar algo idêntico a um lançamento existente.
+    if (duplicataDetectada && !duplicataConfirmada) {
+      setFormError("Parece que este lançamento já existe. Confira o aviso acima e confirme se quiser salvar mesmo assim.");
+      return;
+    }
 
     if (form.type === "transferencia") {
       if (!form.account) { setFormError("Selecione a conta de origem."); return; }
@@ -2009,8 +2114,38 @@ export default function App() {
             <div className="flex flex-col gap-3">
               <div>
                 <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Descrição</label>
-                <input className="rz-input rz-focus" placeholder="Ex: Supermercado, Salário…" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+                <input className="rz-input rz-focus" placeholder="Ex: Supermercado, Salário…" value={form.description} onChange={(e) => { setForm({ ...form, description: e.target.value }); setDuplicataConfirmada(false); }} />
               </div>
+
+              {duplicataDetectada && (
+                <div className="rounded-lg p-3 text-xs" style={{ background: "var(--surface)", border: "1px solid var(--brick)", color: "var(--ink)" }}>
+                  <div className="flex items-start gap-2">
+                    <Copy size={14} className="shrink-0 mt-0.5" style={{ color: "var(--brick)" }} />
+                    <div className="flex-1 min-w-0">
+                      <p>
+                        Já existe <strong>{duplicataDetectada.description}</strong> de{" "}
+                        <span className="rz-mono">{formatCurrency(duplicataDetectada.amount)}</span> em{" "}
+                        {formatDateBR(duplicataDetectada.date)}.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => { setDuplicataConfirmada((v) => !v); setFormError(""); }}
+                        className="rz-focus flex items-center gap-2 mt-2"
+                        title="Marque para salvar mesmo assim"
+                      >
+                        <span style={{
+                          width: 15, height: 15, borderRadius: 4, border: "1.5px solid var(--line)",
+                          background: duplicataConfirmada ? "var(--ink)" : "var(--surface)",
+                          display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                        }}>
+                          {duplicataConfirmada && <Check size={11} color="var(--paper)" />}
+                        </span>
+                        Não é repetido, pode salvar
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               <div className="flex gap-3">
                 <div className="flex-1">
@@ -2019,7 +2154,7 @@ export default function App() {
                 </div>
                 <div className="flex-1">
                   <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Data</label>
-                  <input type="date" className="rz-input rz-focus rz-mono" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
+                  <input type="date" className="rz-input rz-focus rz-mono" value={form.date} onChange={(e) => { handleDateChange(e.target.value); setDuplicataConfirmada(false); }} />
                 </div>
               </div>
 
@@ -2064,11 +2199,84 @@ export default function App() {
 
               {form.type !== "transferencia" && (
                 <div>
-                  <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Categoria</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-medium" style={{ color: "var(--ink-soft)" }}>Categoria</label>
+                    <button
+                      type="button"
+                      onClick={() => { setShowInlineCategory((v) => !v); setInlineCategoryError(""); }}
+                      className="rz-focus text-xs flex items-center gap-1"
+                      style={{ color: "var(--ink-soft)" }}
+                      title="Criar uma categoria nova sem sair daqui"
+                    >
+                      {showInlineCategory ? <X size={12} /> : <Plus size={12} />}
+                      {showInlineCategory ? "Cancelar" : "Nova categoria"}
+                    </button>
+                  </div>
+
                   <select className="rz-input rz-focus" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
                     <option value="" disabled>Selecione</option>
                     {categoriesByType[form.type].map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
                   </select>
+
+                  {categoriaSugerida && !showInlineCategory && (
+                    <button
+                      type="button"
+                      onClick={() => setForm((f) => ({ ...f, category: categoriaSugerida.id }))}
+                      className="rz-focus text-xs mt-2 px-3 py-1.5 rounded-full inline-flex items-center gap-1.5"
+                      style={{ background: "var(--surface)", border: "1px solid var(--line)", color: "var(--ink-soft)" }}
+                      title="Usar a categoria que você costuma usar para descrições parecidas"
+                    >
+                      <span className="rz-dot" style={{ background: categoriaSugerida.color }} />
+                      Usar “{categoriaSugerida.label}”, como das outras vezes
+                    </button>
+                  )}
+
+                  {showInlineCategory && (
+                    <div className="mt-2 rounded-lg p-3" style={{ background: "var(--surface)", border: "1px solid var(--line)" }}>
+                      <input
+                        className="rz-input rz-focus text-sm"
+                        placeholder={`Nome da categoria de ${form.type}`}
+                        value={inlineCategoryForm.label}
+                        onChange={(e) => setInlineCategoryForm({ ...inlineCategoryForm, label: e.target.value })}
+                        onKeyDown={(e) => e.key === "Enter" && handleAddInlineCategory()}
+                        autoFocus
+                      />
+                      <div className="flex flex-wrap gap-1.5 mt-2">
+                        {COLOR_PALETTE.map((cor) => (
+                          <button
+                            key={cor}
+                            type="button"
+                            onClick={() => setInlineCategoryForm({ ...inlineCategoryForm, color: cor })}
+                            className="rz-focus rounded-full"
+                            style={{
+                              width: 22, height: 22, background: cor,
+                              border: inlineCategoryForm.color === cor ? "2px solid var(--ink)" : "1px solid var(--line)",
+                            }}
+                            aria-label={`Cor ${cor}`}
+                            title={`Usar a cor ${cor}`}
+                          />
+                        ))}
+                      </div>
+                      {inlineCategoryError && <div className="text-xs mt-2" style={{ color: "var(--brick)" }}>{inlineCategoryError}</div>}
+                      <button
+                        type="button"
+                        onClick={handleAddInlineCategory}
+                        className="rz-btn-primary rz-focus text-xs w-full mt-2 flex items-center justify-center gap-1.5"
+                      >
+                        <Check size={13} /> Criar e usar
+                      </button>
+                      <p className="text-xs mt-2" style={{ color: "var(--ink-soft)" }}>
+                        Para renomear ou excluir categorias, use Configurações.
+                      </p>
+                    </div>
+                  )}
+
+                  {orcamentoDaCategoria && (
+                    <p className="text-xs mt-2 rz-mono" style={{ color: orcamentoDaCategoria.comEste > orcamentoDaCategoria.limite ? "var(--brick)" : "var(--ink-soft)" }}>
+                      Orçamento do mês: {formatCurrency(orcamentoDaCategoria.gasto)} de {formatCurrency(orcamentoDaCategoria.limite)}
+                      {orcamentoDaCategoria.comEste !== orcamentoDaCategoria.gasto && <> — com este, {formatCurrency(orcamentoDaCategoria.comEste)}</>}
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -2092,7 +2300,7 @@ export default function App() {
                   </div>
                   <div>
                     <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Status</label>
-                    <select className="rz-input rz-focus" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
+                    <select className="rz-input rz-focus" value={form.status} onChange={(e) => { setForm({ ...form, status: e.target.value }); setStatusTocado(true); }}>
                       <option value="pago">Concluída</option>
                       <option value="pendente">Agendada</option>
                     </select>
@@ -2112,12 +2320,19 @@ export default function App() {
                   </div>
                   <div className="flex-1">
                     <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Status</label>
-                    <select className="rz-input rz-focus" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
+                    <select className="rz-input rz-focus" value={form.status} onChange={(e) => { setForm({ ...form, status: e.target.value }); setStatusTocado(true); }}>
                       <option value="pago">Pago</option>
                       <option value="pendente">Pendente</option>
                     </select>
                   </div>
                 </div>
+              )}
+
+              {faturaDaCompra && (
+                <p className="text-xs -mt-1" style={{ color: "var(--ink-soft)" }}>
+                  Compra no cartão não baixa o saldo em conta — isso só acontece quando você paga a fatura.
+                  Entra na fatura que fecha em {formatDateBR(dateToISO(faturaDaCompra.fechamento))}.
+                </p>
               )}
 
               <div>
