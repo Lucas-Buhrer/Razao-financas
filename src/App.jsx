@@ -6,7 +6,7 @@ import { uploadReceipt, getReceiptUrl, deleteReceipt } from "./receipts";
 import { CATEGORIES, DEFAULT_BANKS, NAV_ITEMS, COLOR_PALETTE, DEFAULT_SAVINGS_SEED, DEFAULT_THEME, emptyForm, emptyFixedForm, emptyDebtForm } from "./lib/constants";
 import { uid, todayISO, formatCurrency, formatDateBR, colorForEmail, isDarkTheme } from "./lib/format";
 import { downloadCsv, chaveDuplicata, buildCategoryMemory, addMonthsToDateISO } from "./lib/csv";
-import { periodKeyOf, getAmountForPeriod, enrichFixedBills } from "./lib/finance";
+import { periodKeyOf, getAmountForPeriod, enrichFixedBills, billAppliesTo } from "./lib/finance";
 import { SummaryCard, PeriodNavigator, PlaceholderTab } from "./components/common";
 import { VisaoGeralTab } from "./components/VisaoGeralTab";
 import { FixedBillsTab } from "./components/FixedBillsTab";
@@ -460,6 +460,50 @@ export default function App() {
       } catch (e) { /* falha silenciosa: filtro não é dado crítico */ }
     })();
   }, [typeFilter, categoryFilter, accountFilter, sortBy, filtrosCarregados]);
+
+  // ---------- Débito automático ----------
+  // Lança sozinha as contas marcadas como automáticas, uma única vez, quando a
+  // data de vencimento já chegou. Só mexe no mês corrente — nunca preenche o
+  // passado — e só roda depois que lançamentos e contas fixas terminaram de carregar.
+  const autoLaunchFeito = useRef(false);
+
+  useEffect(() => {
+    if (!loaded || !fixedBillsLoaded || autoLaunchFeito.current) return;
+    autoLaunchFeito.current = true;
+
+    const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+    const period = periodKeyOf(hoje);
+    const diasNoMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0).getDate();
+
+    const aLancar = fixedBills.filter((bill) => {
+      if (!bill.active || !bill.autoLaunch) return false;
+      if (!billAppliesTo(bill, hoje)) return false;
+      const jaLancada = transactions.some((t) => t.recurringId === bill.id && t.recurringPeriod === period);
+      if (jaLancada) return false;
+      const dia = Math.min(bill.dueDay, diasNoMes);
+      return new Date(hoje.getFullYear(), hoje.getMonth(), dia) <= hoje;
+    });
+
+    if (aLancar.length === 0) return;
+
+    const novos = aLancar.map((bill) => {
+      const dia = Math.min(bill.dueDay, diasNoMes);
+      return {
+        id: uid(), description: bill.description,
+        amount: getAmountForPeriod(bill, hoje),
+        date: `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}-${String(dia).padStart(2, "0")}`,
+        type: bill.type, category: bill.category, account: bill.account, status: "pago",
+        recurringId: bill.id, recurringPeriod: period, autoLancado: true, createdBy: currentUserEmail,
+      };
+    });
+
+    const anterior = transactions;
+    setTransactions((prev) => [...prev, ...novos]);
+    setToast({
+      message: `${novos.length} conta${novos.length !== 1 ? "s" : ""} em débito automático lançada${novos.length !== 1 ? "s" : ""}.`,
+      snapshot: anterior,
+    });
+  }, [loaded, fixedBillsLoaded, fixedBills, transactions]);
 
   // ---------- Toast auto-dismiss ----------
   useEffect(() => {
@@ -1033,7 +1077,7 @@ export default function App() {
     setFixedForm({
       description: bill.description, amount: String(getAmountForPeriod(bill, refDate)),
       type: bill.type, category: bill.category, account: bill.account || "", dueDay: String(bill.dueDay),
-      frequency: bill.frequency || "mensal", endPeriod: bill.endPeriod || "",
+      frequency: bill.frequency || "mensal", endPeriod: bill.endPeriod || "", autoLaunch: !!bill.autoLaunch,
     });
     setEditingFixedId(bill.id);
     setShowFixedForm(true);
@@ -1067,6 +1111,7 @@ export default function App() {
           dueDay: dayNum,
           frequency: fixedForm.frequency || "mensal",
           endPeriod: fixedForm.endPeriod || "",
+          autoLaunch: !!fixedForm.autoLaunch,
           amountHistory,
         };
       }));
@@ -1077,6 +1122,7 @@ export default function App() {
         frequency: fixedForm.frequency || "mensal",
         startPeriod: period,
         endPeriod: fixedForm.endPeriod || "",
+        autoLaunch: !!fixedForm.autoLaunch,
         amountHistory: [{ period, amount: amountNum }],
       }]);
     }
@@ -1772,6 +1818,12 @@ export default function App() {
                   const corValor = ehTransf ? "var(--ink-soft)" : (t.type === "receita" ? "var(--emerald)" : "var(--brick)");
                   const selecionado = selecionados.includes(t.id);
                   const ehFuturo = t.date > todayISO();
+                  const autoTag = t.autoLancado ? (
+                    <span className="rz-mono text-[9px] px-1.5 py-0.5 rounded shrink-0" title="Lançado automaticamente por débito automático"
+                      style={{ background: "var(--emerald-soft)", color: "var(--emerald)" }}>
+                      AUTO
+                    </span>
+                  ) : null;
                   const futuroTag = ehFuturo ? (
                     <span className="rz-mono text-[9px] px-1.5 py-0.5 rounded shrink-0" style={{ background: "var(--gold-soft)", color: "var(--gold)" }} title="Data ainda não chegou">
                       FUTURO
@@ -1879,6 +1931,7 @@ export default function App() {
                             <div className="flex items-center gap-1.5 min-w-0">
                               <span className="text-sm font-medium truncate">{t.installmentTotal ? t.description.replace(/ \(\d+\/\d+\)$/, "") : t.description}</span>
                               {parcelaTag}
+                              {autoTag}
                               {futuroTag}
                             </div>
                             <div className="text-xs" style={{ color: "var(--ink-soft)" }}>{subtitulo}</div>
@@ -1911,6 +1964,7 @@ export default function App() {
                             <div className="flex items-center gap-1.5 min-w-0">
                               <span className="text-sm font-medium truncate">{t.installmentTotal ? t.description.replace(/ \(\d+\/\d+\)$/, "") : t.description}</span>
                               {parcelaTag}
+                              {autoTag}
                               {futuroTag}
                             </div>
                             <div className="text-xs" style={{ color: "var(--ink-soft)" }}>{subtitulo}</div>

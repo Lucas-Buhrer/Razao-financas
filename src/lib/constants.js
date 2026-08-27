@@ -71,5 +71,5 @@ export const FIXED_STATUS_LABEL = { lancada: "Lançada", vencendo: "Vence em bre
 export const FIXED_STATUS_CLASS = { lancada: "rz-stamp-pago", vencendo: "rz-stamp-pendente", atrasada: "rz-stamp-atrasada", a_vencer: "rz-stamp-neutro" };
 
 export const emptyForm = { description: "", amount: "", date: new Date().toISOString().slice(0, 10), type: "despesa", category: "", account: "", toAccount: "", status: "pago", installments: false, installmentCount: "2", attachmentPath: null, attachmentName: "" };
-export const emptyFixedForm = { description: "", amount: "", type: "despesa", category: "", account: "", dueDay: "5", frequency: "mensal", endPeriod: "" };
+export const emptyFixedForm = { description: "", amount: "", type: "despesa", category: "", account: "", dueDay: "5", frequency: "mensal", endPeriod: "", autoLaunch: false };
 export const emptyDebtForm = { person: "", amount: "", direction: "emprestei", date: new Date().toISOString().slice(0, 10), dueDate: "", notes: "", interestRate: "" };

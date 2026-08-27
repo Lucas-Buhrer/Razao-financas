@@ -135,6 +135,12 @@ function FixedBillsTab({
         {b.endPeriod && " · até " + b.endPeriod}
       </div>
     );
+    const autoEl = b.autoLaunch ? (
+      <span className="rz-mono text-[9px] px-1.5 py-0.5 rounded shrink-0" title="Lançada automaticamente quando a data chega"
+        style={{ background: "var(--emerald-soft)", color: "var(--emerald)" }}>
+        AUTO
+      </span>
+    ) : null;
     const reajusteEl = reajuste !== null ? (
       <span className="rz-mono text-[10px] px-1.5 py-0.5 rounded shrink-0" title={"Valor mudou em relação ao último lançamento"}
         style={{ background: "var(--gold-soft)", color: "var(--gold)" }}>
@@ -150,6 +156,7 @@ function FixedBillsTab({
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1.5 min-w-0">
                 <span className="text-sm font-medium truncate">{b.description}</span>
+                {autoEl}
                 {reajusteEl}
               </div>
               {subtitulo}
@@ -168,6 +175,7 @@ function FixedBillsTab({
             <div className="min-w-0">
               <div className="flex items-center gap-1.5 min-w-0">
                 <span className="text-sm font-medium truncate">{b.description}</span>
+                {autoEl}
                 {reajusteEl}
               </div>
               {subtitulo}
@@ -495,6 +503,26 @@ function FixedBillsTab({
                   ? "A cobrança vai se repetir a cada " + FREQUENCIAS[fixedForm.frequency].meses + " meses, a partir deste."
                   : "Use \"termina em\" para financiamentos e planos com prazo — a conta some sozinha depois."}
               </p>
+
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setFixedForm({ ...fixedForm, autoLaunch: !fixedForm.autoLaunch })}
+                  className="rz-focus flex items-center gap-2 text-sm"
+                >
+                  <span style={{
+                    width: 16, height: 16, borderRadius: 4, border: "1.5px solid var(--line)",
+                    background: fixedForm.autoLaunch ? "var(--ink)" : "var(--surface)",
+                    display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                  }}>
+                    {fixedForm.autoLaunch && <Check size={12} color="var(--paper)" />}
+                  </span>
+                  Está em débito automático
+                </button>
+                <p className="text-xs mt-1" style={{ color: "var(--ink-soft)" }}>
+                  O sistema lança sozinho quando a data chegar, sem você precisar clicar. Use só para o que sai da conta automaticamente.
+                </p>
+              </div>
 
               <div>
                 <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Categoria</label>
