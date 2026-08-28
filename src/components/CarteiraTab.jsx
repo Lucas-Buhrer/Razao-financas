@@ -158,6 +158,29 @@ function FaturaCard({ fatura, findCategory }) {
         </p>
       )}
 
+      {fatura.creditLimit > 0 && (() => {
+        // O que já comprometeu o limite é a fatura aberta do ciclo atual.
+        const usado = Math.max(0, fatura.aberto);
+        const disponivel = Math.max(0, fatura.creditLimit - usado);
+        const pct = Math.min(100, (usado / fatura.creditLimit) * 100);
+        const apertado = pct >= 80;
+        return (
+          <div className="mt-3">
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <span className="text-xs" style={{ color: "var(--ink-soft)" }}>
+                Limite disponível: <span className="rz-mono">{formatCurrency(disponivel)}</span> de {formatCurrency(fatura.creditLimit)}
+              </span>
+              <span className="rz-mono text-[11px]" style={{ color: apertado ? "var(--brick)" : "var(--ink-soft)" }}>
+                {pct.toFixed(0)}% usado
+              </span>
+            </div>
+            <div className="rz-progress-track">
+              <div className="rz-progress-fill" style={{ width: `${pct}%`, background: apertado ? "var(--brick)" : "var(--emerald)" }} />
+            </div>
+          </div>
+        );
+      })()}
+
       {!fatura.closingDay && (
         <p className="text-xs mt-2 px-3 py-2 rounded-lg" style={{ background: "var(--paper-alt)", color: "var(--ink-soft)" }}>
           Sem dia de fechamento definido — a fatura está usando o mês do calendário. Ajuste em Configurações → Contas e Bancos.

@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { Check, ChevronLeft, ChevronRight, Pencil, Trash2, X } from "lucide-react";
+import { Archive, Check, ChevronLeft, ChevronRight, Pencil, RotateCcw, Trash2, X } from "lucide-react";
 import { COLOR_PALETTE, MONTHS } from "../lib/constants";
-import { formatCurrency } from "../lib/format";
+import { clampDia, formatCurrency, parseMoedaBR } from "../lib/format";
 
 function SummaryCard({ label, value, icon: Icon, tone, rodape }) {
   const toneColor = tone === "emerald" ? "var(--emerald)" : "var(--brick)";
@@ -54,14 +54,19 @@ function PeriodNavigator({ periodMode, refDate, shiftMonth, setPeriodMode, hideT
   );
 }
 
-function CategoryRow({ cat, isFirst, isCustom, onDelete, onUpdate, isBank, onMove, primeira, ultima }) {
+function CategoryRow({
+  cat, isFirst, isCustom, onDelete, onUpdate, isBank, onMove, primeira, ultima,
+  uso = 0, onArchive, arquivado = false,
+}) {
   const [editing, setEditing] = useState(false);
+  const [erro, setErro] = useState("");
   const [tempLabel, setTempLabel] = useState(cat.label);
   const [tempColor, setTempColor] = useState(cat.color);
   const [tempInitial, setTempInitial] = useState(String(cat.initialBalance ?? ""));
   const [tempKind, setTempKind] = useState(cat.kind || "conta");
   const [tempClosing, setTempClosing] = useState(cat.closingDay ? String(cat.closingDay) : "");
   const [tempDue, setTempDue] = useState(cat.dueDay ? String(cat.dueDay) : "");
+  const [tempLimit, setTempLimit] = useState(cat.creditLimit ? String(cat.creditLimit) : "");
 
   const startEdit = () => {
     setTempLabel(cat.label); setTempColor(cat.color);
@@ -69,17 +74,32 @@ function CategoryRow({ cat, isFirst, isCustom, onDelete, onUpdate, isBank, onMov
     setTempKind(cat.kind || "conta");
     setTempClosing(cat.closingDay ? String(cat.closingDay) : "");
     setTempDue(cat.dueDay ? String(cat.dueDay) : "");
+    setTempLimit(cat.creditLimit ? String(cat.creditLimit) : "");
+    setErro("");
     setEditing(true);
   };
+
   const save = () => {
-    if (!tempLabel.trim()) return;
-    const extra = isBank ? {
-      initialBalance: parseFloat(String(tempInitial).replace(",", ".")) || 0,
-      kind: tempKind,
-      closingDay: tempKind === "cartao" ? (parseInt(tempClosing, 10) || null) : null,
-      dueDay: tempKind === "cartao" ? (parseInt(tempDue, 10) || null) : null,
-    } : {};
+    if (!tempLabel.trim()) { setErro("O nome não pode ficar vazio."); return; }
+    let extra = {};
+    if (isBank) {
+      const ehCartao = tempKind === "cartao";
+      const fecha = clampDia(tempClosing);
+      const vence = clampDia(tempDue);
+      // O max="31" do input não impede digitar 45 em todo navegador.
+      if (ehCartao && tempClosing && fecha === null) { setErro("Fechamento precisa ser um dia entre 1 e 31."); return; }
+      if (ehCartao && tempDue && vence === null) { setErro("Vencimento precisa ser um dia entre 1 e 31."); return; }
+      const limite = parseMoedaBR(tempLimit);
+      extra = {
+        initialBalance: ehCartao ? 0 : parseMoedaBR(tempInitial),
+        kind: tempKind,
+        closingDay: ehCartao ? fecha : null,
+        dueDay: ehCartao ? vence : null,
+        creditLimit: ehCartao && limite > 0 ? limite : null,
+      };
+    }
     onUpdate(cat, tempLabel, tempColor, extra);
+    setErro("");
     setEditing(false);
   };
 
@@ -90,7 +110,7 @@ function CategoryRow({ cat, isFirst, isCustom, onDelete, onUpdate, isBank, onMov
           <input
             className="rz-input rz-focus text-sm flex-1"
             value={tempLabel}
-            onChange={(e) => setTempLabel(e.target.value)}
+            onChange={(e) => { setTempLabel(e.target.value); if (erro) setErro(""); }}
             onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }}
             autoFocus
           />
@@ -130,6 +150,10 @@ function CategoryRow({ cat, isFirst, isCustom, onDelete, onUpdate, isBank, onMov
                   <label className="text-xs" style={{ color: "var(--ink-soft)" }}>Vence</label>
                   <input type="number" min="1" max="31" className="rz-input rz-focus rz-mono text-sm" style={{ width: 62 }} value={tempDue} onChange={(e) => setTempDue(e.target.value)} />
                 </div>
+                <div className="flex items-center gap-1.5">
+                  <label className="text-xs" style={{ color: "var(--ink-soft)" }}>Limite</label>
+                  <input className="rz-input rz-focus rz-mono text-sm" style={{ width: 110 }} inputMode="decimal" placeholder="0,00" value={tempLimit} onChange={(e) => setTempLimit(e.target.value)} />
+                </div>
               </>
             )}
           </div>
@@ -148,24 +172,31 @@ function CategoryRow({ cat, isFirst, isCustom, onDelete, onUpdate, isBank, onMov
             />
           </div>
         )}
+        {erro && <div className="text-xs mt-2" style={{ color: "var(--brick)" }}>{erro}</div>}
       </div>
     );
   }
 
   return (
-    <div className="flex items-center gap-2 px-3 py-2.5" style={{ borderTop: isFirst ? "none" : "1px solid var(--line)" }}>
+    <div className="flex items-center gap-2 px-3 py-2.5" style={{ borderTop: isFirst ? "none" : "1px solid var(--line)", opacity: arquivado ? 0.6 : 1 }}>
       <span className="rz-dot" style={{ background: cat.color }} />
       <div className="flex-1 min-w-0">
         <div className="text-sm truncate">{cat.label}</div>
-        {isBank && cat.kind === "cartao" ? (
-          <div className="text-xs" style={{ color: "var(--ink-soft)" }}>
-            Cartão{cat.closingDay ? ` · fecha dia ${cat.closingDay}` : ""}{cat.dueDay ? ` · vence dia ${cat.dueDay}` : ""}
-          </div>
-        ) : isBank && cat.initialBalance ? (
-          <div className="text-xs" style={{ color: "var(--ink-soft)" }}>Saldo inicial: {formatCurrency(cat.initialBalance)}</div>
-        ) : null}
+        <div className="text-xs" style={{ color: "var(--ink-soft)" }}>
+          {isBank && cat.kind === "cartao" && (
+            <>Cartão{cat.closingDay ? ` · fecha dia ${cat.closingDay}` : ""}{cat.dueDay ? ` · vence dia ${cat.dueDay}` : ""}{cat.creditLimit ? ` · limite ${formatCurrency(cat.creditLimit)}` : ""}</>
+          )}
+          {isBank && cat.kind !== "cartao" && cat.initialBalance ? <>Saldo inicial: {formatCurrency(cat.initialBalance)}</> : null}
+          {uso > 0 && (
+            <>
+              {((isBank && (cat.kind === "cartao" || cat.initialBalance)) ? " · " : "")}
+              {uso} registro{uso !== 1 ? "s" : ""} {isBank ? "nesta conta" : "nesta categoria"}
+            </>
+          )}
+        </div>
       </div>
-      {!isCustom && <span className="rz-mono text-[9px] opacity-50">PADRÃO</span>}
+      {arquivado && <span className="rz-mono text-[9px] opacity-60">ARQUIVADA</span>}
+      {!isCustom && !arquivado && <span className="rz-mono text-[9px] opacity-50">PADRÃO</span>}
       {onMove && (
         <>
           <button onClick={() => onMove(-1)} disabled={primeira} className="rz-focus p-1 rounded-md disabled:opacity-25" aria-label="Mover para cima" title="Mover para cima" style={{ color: "var(--ink-soft)" }}>
@@ -176,14 +207,27 @@ function CategoryRow({ cat, isFirst, isCustom, onDelete, onUpdate, isBank, onMov
           </button>
         </>
       )}
-      {onUpdate && (
+      {onUpdate && !arquivado && (
         <button onClick={startEdit} className="rz-focus p-1 rounded-md" aria-label="Editar" title="Editar nome e cor" style={{ color: "var(--ink-soft)" }}>
           <Pencil size={13} />
         </button>
       )}
-      <button onClick={() => onDelete(cat)} className="rz-focus p-1 rounded-md" aria-label="Excluir" title="Excluir" style={{ color: "var(--ink-soft)" }}>
-        <Trash2 size={14} />
-      </button>
+      {onArchive && (
+        <button
+          onClick={() => onArchive(cat, !arquivado)}
+          className="rz-focus p-1 rounded-md"
+          aria-label={arquivado ? "Reativar" : "Arquivar"}
+          title={arquivado ? "Voltar a usar" : "Arquivar (some dos seletores, mantém o histórico)"}
+          style={{ color: "var(--ink-soft)" }}
+        >
+          {arquivado ? <RotateCcw size={13} /> : <Archive size={13} />}
+        </button>
+      )}
+      {onDelete && (
+        <button onClick={() => onDelete(cat)} className="rz-focus p-1 rounded-md" aria-label="Excluir" title="Excluir" style={{ color: "var(--ink-soft)" }}>
+          <Trash2 size={14} />
+        </button>
+      )}
     </div>
   );
 }

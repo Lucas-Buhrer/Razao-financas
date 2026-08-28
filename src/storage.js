@@ -32,42 +32,55 @@ export function resetStorageCache() {
   cachedForUserId = null;
 }
 
+// Algumas preferências são de quem está usando, não da família inteira (o tema,
+// por exemplo). Elas continuam na mesma tabela, mas com o id do usuário no fim
+// da chave: "tema_cores@<uuid>". Assim cada membro tem a sua.
+async function resolverChave(key, perUser) {
+  if (!perUser) return key;
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Usuário não autenticado.");
+  return `${key}@${user.id}`;
+}
+
 export const storage = {
-  async get(key) {
+  async get(key, { perUser = false } = {}) {
     const householdId = await getHouseholdId();
+    const chave = await resolverChave(key, perUser);
     const { data, error } = await supabase
       .from("user_data")
       .select("key, value")
       .eq("household_id", householdId)
-      .eq("key", key)
+      .eq("key", chave)
       .maybeSingle();
     if (error) throw error;
     if (!data) return null;
     return { key: data.key, value: data.value };
   },
 
-  async set(key, value) {
+  async set(key, value, { perUser = false } = {}) {
     const householdId = await getHouseholdId();
     const { data: { user } } = await supabase.auth.getUser();
+    const chave = await resolverChave(key, perUser);
     const { error } = await supabase
       .from("user_data")
       .upsert(
-        { household_id: householdId, user_id: user.id, key, value, updated_at: new Date().toISOString() },
+        { household_id: householdId, user_id: user.id, key: chave, value, updated_at: new Date().toISOString() },
         { onConflict: "household_id,key" }
       );
     if (error) throw error;
-    return { key, value };
+    return { key: chave, value };
   },
 
-  async delete(key) {
+  async delete(key, { perUser = false } = {}) {
     const householdId = await getHouseholdId();
+    const chave = await resolverChave(key, perUser);
     const { error } = await supabase
       .from("user_data")
       .delete()
       .eq("household_id", householdId)
-      .eq("key", key);
+      .eq("key", chave);
     if (error) throw error;
-    return { key, deleted: true };
+    return { key: chave, deleted: true };
   },
 
   async list(prefix = "") {

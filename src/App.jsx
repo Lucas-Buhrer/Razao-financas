@@ -3,8 +3,8 @@ import { BookOpen, Receipt, Plus, Trash2, Pencil, X, Check, Search, TrendingUp, 
 import { storage } from "./storage";
 import { supabase } from "./supabaseClient";
 import { uploadReceipt, getReceiptUrl, deleteReceipt } from "./receipts";
-import { CATEGORIES, DEFAULT_BANKS, NAV_ITEMS, COLOR_PALETTE, DEFAULT_SAVINGS_SEED, DEFAULT_THEME, emptyForm, emptyFixedForm, emptyDebtForm } from "./lib/constants";
-import { uid, todayISO, formatCurrency, formatDateBR, dateToISO, colorForEmail, isDarkTheme } from "./lib/format";
+import { CATEGORIES, DEFAULT_BANKS, NAV_ITEMS, COLOR_PALETTE, DEFAULT_SAVINGS_SEED, DEFAULT_THEME, THEME_PRESETS, emptyForm, emptyFixedForm, emptyDebtForm } from "./lib/constants";
+import { uid, todayISO, formatCurrency, formatDateBR, dateToISO, colorForEmail, isDarkTheme, parseMoedaBR, clampDia } from "./lib/format";
 import { downloadCsv, chaveDuplicata, buildCategoryMemory, normalizeDesc, addMonthsToDateISO } from "./lib/csv";
 import { periodKeyOf, getAmountForPeriod, enrichFixedBills, billAppliesTo, cicloDaFatura } from "./lib/finance";
 import { SummaryCard, PeriodNavigator, PlaceholderTab } from "./components/common";
@@ -33,16 +33,44 @@ export default function App() {
 
   const [currentUserEmail, setCurrentUserEmail] = useState("");
   const [householdMemberCount, setHouseholdMemberCount] = useState(1);
+  const [householdMembers, setHouseholdMembers] = useState([]);
+  const [configSubTab, setConfigSubTab] = useState("tema");
+
+  const carregarMembros = async () => {
+    // A RPC vem do SQL 05 e traz e-mail e apelido. Enquanto ela não existir no
+    // projeto, o app continua funcionando só com a contagem.
+    try {
+      const { data, error } = await supabase.rpc("list_household_members");
+      if (error) throw error;
+      if (Array.isArray(data)) {
+        setHouseholdMembers(data);
+        setHouseholdMemberCount(data.length || 1);
+        return;
+      }
+    } catch (e) {
+      setHouseholdMembers([]);
+    }
+    const { count } = await supabase.from("household_members").select("id", { count: "exact", head: true });
+    if (count) setHouseholdMemberCount(count);
+  };
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setCurrentUserEmail(data?.user?.email || ""));
-    supabase.from("household_members").select("id", { count: "exact", head: true }).then(({ count }) => {
-      if (count) setHouseholdMemberCount(count);
-    });
+    carregarMembros();
   }, []);
+
+  // E-mail → apelido, para os avatares dos lançamentos mostrarem gente em vez
+  // da primeira letra do e-mail.
+  const nomePorEmail = useMemo(() => {
+    const map = {};
+    householdMembers.forEach((m) => { if (m.email && m.display_name) map[m.email] = m.display_name; });
+    return map;
+  }, [householdMembers]);
+  const nomeDe = (email) => nomePorEmail[email] || email || "Desconhecido";
 
   const [theme, setTheme] = useState(DEFAULT_THEME);
   const [themeLoaded, setThemeLoaded] = useState(false);
+  const [seguirSistema, setSeguirSistema] = useState(false);
 
   const [transactions, setTransactions] = useState([]);
   const [loaded, setLoaded] = useState(false);
@@ -57,9 +85,10 @@ export default function App() {
 
   const [customBanks, setCustomBanks] = useState([]);
   const [banksLoaded, setBanksLoaded] = useState(false);
-  const [bankForm, setBankForm] = useState({ label: "", color: COLOR_PALETTE[0], initialBalance: "", kind: "conta", closingDay: "", dueDay: "" });
+  const [bankForm, setBankForm] = useState({ label: "", color: COLOR_PALETTE[0], initialBalance: "", kind: "conta", closingDay: "", dueDay: "", creditLimit: "" });
   const [bankError, setBankError] = useState("");
   const [hiddenDefaultBanks, setHiddenDefaultBanks] = useState([]);
+  const [bankOrder, setBankOrder] = useState([]);
 
   const [fixedBills, setFixedBills] = useState([]);
   const [fixedBillsLoaded, setFixedBillsLoaded] = useState(false);
@@ -81,6 +110,7 @@ export default function App() {
   const [debtError, setDebtError] = useState("");
 
   const [backupMessage, setBackupMessage] = useState(null);
+  const [ultimoBackup, setUltimoBackup] = useState(null);
   const [showCsvImport, setShowCsvImport] = useState(false);
   const [showQuickAdd, setShowQuickAdd] = useState(false);
   const [quickForm, setQuickForm] = useState({ amount: "", description: "", category: "", type: "despesa" });
@@ -121,10 +151,14 @@ export default function App() {
   const toastTimer = useRef(null);
 
   // ---------- Load theme ----------
+  // O tema é preferência de quem está usando, não da família: fica numa chave
+  // por usuário. Se ainda não existir, herda uma única vez o tema antigo
+  // (compartilhado) para ninguém estranhar a mudança.
   useEffect(() => {
     (async () => {
       try {
-        const res = await storage.get("tema_cores", false);
+        let res = await storage.get("tema_cores", { perUser: true });
+        if (!res || !res.value) res = await storage.get("tema_cores");
         setTheme(res && res.value ? { ...DEFAULT_THEME, ...JSON.parse(res.value) } : DEFAULT_THEME);
       } catch (e) {
         setTheme(DEFAULT_THEME);
@@ -135,15 +169,20 @@ export default function App() {
   }, []);
 
   // ---------- Save theme ----------
+  // O <input type="color"> dispara onChange a cada movimento do cursor. Sem o
+  // atraso abaixo, arrastar no seletor gerava uma escrita no Supabase por frame.
   useEffect(() => {
     if (!themeLoaded) return;
-    (async () => {
-      try {
-        await storage.set("tema_cores", JSON.stringify(theme), false);
-      } catch (e) {
-        setLoadError(true);
-      }
-    })();
+    const timer = setTimeout(() => {
+      (async () => {
+        try {
+          await storage.set("tema_cores", JSON.stringify(theme), { perUser: true });
+        } catch (e) {
+          setLoadError(true);
+        }
+      })();
+    }, 500);
+    return () => clearTimeout(timer);
   }, [theme, themeLoaded]);
 
   // ---------- Load from persistent storage ----------
@@ -292,6 +331,62 @@ export default function App() {
       }
     })();
   }, [hiddenDefaultBanks, banksLoaded]);
+
+  // ---------- Acompanhar claro/escuro do sistema ----------
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await storage.get("tema_seguir_sistema", { perUser: true });
+        setSeguirSistema(res?.value === "true");
+      } catch (e) { /* nunca configurou */ }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!themeLoaded) return;
+    storage.set("tema_seguir_sistema", seguirSistema ? "true" : "false", { perUser: true }).catch(() => {});
+    if (!seguirSistema || !window.matchMedia) return;
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const aplicar = () => {
+      const nome = mq.matches ? "Escuro" : "Razão Clássico";
+      const preset = THEME_PRESETS.find((p) => p.name === nome);
+      if (preset) setTheme(preset.colors);
+    };
+    aplicar();
+    mq.addEventListener("change", aplicar);
+    return () => mq.removeEventListener("change", aplicar);
+  }, [seguirSistema, themeLoaded]);
+
+  // ---------- Último backup (só para lembrar o usuário) ----------
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await storage.get("ultimo_backup");
+        if (res && res.value) setUltimoBackup(res.value);
+      } catch (e) { /* nunca fez backup */ }
+    })();
+  }, []);
+
+  // ---------- Load/save ordem dos bancos ----------
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await storage.get("ordem_bancos");
+        if (res && res.value) setBankOrder(JSON.parse(res.value));
+      } catch (e) { /* ainda não existe */ }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!banksLoaded) return;
+    (async () => {
+      try {
+        await storage.set("ordem_bancos", JSON.stringify(bankOrder));
+      } catch (e) {
+        setLoadError(true);
+      }
+    })();
+  }, [bankOrder, banksLoaded]);
 
   // ---------- Load fixed bills ----------
   useEffect(() => {
@@ -529,19 +624,60 @@ export default function App() {
       ordem.forEach((id, i) => { pos[id] = i; });
       return [...lista].sort((a, b) => (pos[a.id] ?? 9999) - (pos[b.id] ?? 9999));
     };
+    // Categoria arquivada some dos seletores e das listas, mas o findCategory
+    // continua achando o nome dela nos lançamentos antigos.
+    const custom = (tipo) => customCategories.filter((c) => c.type === tipo && !c.arquivada);
     return {
-      receita: aplicarOrdem([...CATEGORIES.receita.filter((c) => !hiddenDefaultCategories.includes(c.id)), ...customCategories.filter((c) => c.type === "receita")], categoryOrder.receita),
-      despesa: aplicarOrdem([...CATEGORIES.despesa.filter((c) => !hiddenDefaultCategories.includes(c.id)), ...customCategories.filter((c) => c.type === "despesa")], categoryOrder.despesa),
+      receita: aplicarOrdem([...CATEGORIES.receita.filter((c) => !hiddenDefaultCategories.includes(c.id)), ...custom("receita")], categoryOrder.receita),
+      despesa: aplicarOrdem([...CATEGORIES.despesa.filter((c) => !hiddenDefaultCategories.includes(c.id)), ...custom("despesa")], categoryOrder.despesa),
     };
   }, [customCategories, hiddenDefaultCategories, categoryOrder]);
+
+  const categoriasArquivadas = useMemo(() => customCategories.filter((c) => c.arquivada), [customCategories]);
 
   const findCategory = (type, id) => {
     const allTypeCats = [...(CATEGORIES[type] || []), ...customCategories.filter((c) => c.type === type)];
     return allTypeCats.find((c) => c.id === id) || { label: id, color: "#9A8A7A" };
   };
 
-  const banksList = useMemo(() => [...DEFAULT_BANKS.filter((b) => !hiddenDefaultBanks.includes(b.id)), ...customBanks], [customBanks, hiddenDefaultBanks]);
+  // Atenção: conta arquivada CONTINUA aqui. O saldo geral e a aba Contas somam
+  // a partir desta lista — tirar uma conta daqui zeraria dinheiro que existe
+  // (foi o que aconteceu quando cartão sumia das contas, ver ARMADILHAS.md).
+  // Arquivar só esconde a conta dos seletores de lançamento (banksParaSelecao).
+  const banksList = useMemo(() => {
+    const lista = [
+      ...DEFAULT_BANKS.filter((b) => !hiddenDefaultBanks.includes(b.id)),
+      ...customBanks,
+    ];
+    if (!bankOrder || bankOrder.length === 0) return lista;
+    const pos = {};
+    bankOrder.forEach((id, i) => { pos[id] = i; });
+    return [...lista].sort((a, b) => (pos[a.id] ?? 9999) - (pos[b.id] ?? 9999));
+  }, [customBanks, hiddenDefaultBanks, bankOrder]);
+
+  const banksParaSelecao = useMemo(() => banksList.filter((b) => !b.arquivado), [banksList]);
+  const bancosArquivados = useMemo(() => customBanks.filter((b) => b.arquivado), [customBanks]);
   const findBank = (id) => [...DEFAULT_BANKS, ...customBanks].find((b) => b.id === id);
+
+  // Quantos registros dependem de cada categoria / conta. Serve para avisar
+  // antes de excluir e para oferecer o remapeamento.
+  const usoPorCategoria = useMemo(() => {
+    const map = {};
+    const conta = (id) => { if (id) map[id] = (map[id] || 0) + 1; };
+    transactions.forEach((t) => conta(t.category));
+    fixedBills.forEach((b) => conta(b.category));
+    budgets.forEach((o) => conta(o.categoryId));
+    return map;
+  }, [transactions, fixedBills, budgets]);
+
+  const usoPorConta = useMemo(() => {
+    const map = {};
+    const conta = (id) => { if (id) map[id] = (map[id] || 0) + 1; };
+    transactions.forEach((t) => { conta(t.account); conta(t.toAccount); });
+    fixedBills.forEach((b) => conta(b.account));
+    budgets.forEach((o) => conta(o.accountId));
+    return map;
+  }, [transactions, fixedBills, budgets]);
 
   const saldosIniciais = useMemo(() => banksList.filter((b) => b.kind !== "cartao").reduce((s, b) => s + (b.initialBalance || 0), 0), [banksList]);
 
@@ -566,7 +702,7 @@ export default function App() {
   // Mesma chave usada na importação (data + valor + início da descrição).
   const duplicataDetectada = useMemo(() => {
     if (editingId) return null;
-    const valor = parseFloat(String(form.amount).replace(",", "."));
+    const valor = parseMoedaBR(form.amount);
     if (!form.description.trim() || !valor || valor <= 0 || !form.date) return null;
     const chave = chaveDuplicata({ date: form.date, amount: valor, description: form.description });
     if (!chavesExistentes.has(chave)) return null;
@@ -602,7 +738,7 @@ export default function App() {
         return td.getFullYear() === d.getFullYear() && td.getMonth() === d.getMonth();
       })
       .reduce((s, t) => s + Number(t.amount), 0);
-    const valor = parseFloat(String(form.amount).replace(",", ".")) || 0;
+    const valor = parseMoedaBR(form.amount);
     return { limite: orc.limit, gasto, comEste: gasto + valor };
   }, [form.type, form.category, form.date, form.amount, budgets, transactions, editingId]);
 
@@ -785,7 +921,7 @@ export default function App() {
   };
 
   const handleSubmit = () => {
-    const amountNum = parseFloat(String(form.amount).replace(",", "."));
+    const amountNum = parseMoedaBR(form.amount);
     if (!form.description.trim()) { setFormError("Dê uma descrição para o lançamento."); return; }
     if (!amountNum || amountNum <= 0) { setFormError("Informe um valor maior que zero."); return; }
     if (!form.date) { setFormError("Selecione uma data."); return; }
@@ -927,7 +1063,7 @@ export default function App() {
   };
 
   const handleQuickAdd = () => {
-    const valor = parseFloat(String(quickForm.amount).replace(",", "."));
+    const valor = parseMoedaBR(quickForm.amount);
     if (!valor || valor <= 0) { setQuickError("Informe um valor."); return; }
     if (!quickForm.category) { setQuickError("Escolha uma categoria."); return; }
     setTransactions((prev) => [...prev, {
@@ -952,10 +1088,10 @@ export default function App() {
   };
 
   const handleSubmitDebt = () => {
-    const valor = parseFloat(String(debtForm.amount).replace(",", "."));
+    const valor = parseMoedaBR(debtForm.amount);
     if (!debtForm.person.trim()) { setDebtError("Informe a pessoa ou instituição."); return; }
     if (!valor || valor <= 0) { setDebtError("Informe um valor maior que zero."); return; }
-    const juros = parseFloat(String(debtForm.interestRate).replace(",", ".")) || 0;
+    const juros = parseMoedaBR(debtForm.interestRate);
     if (editingDebtId) {
       setDebts((prev) => prev.map((d) => (d.id === editingDebtId ? { ...d, ...debtForm, person: debtForm.person.trim(), amount: valor, interestRate: juros } : d)));
     } else {
@@ -1078,10 +1214,32 @@ export default function App() {
     setRefDate((d) => new Date(d.getFullYear(), d.getMonth() + delta, 1));
   };
 
-  const resetAllData = () => {
-    if (window.confirm("Isso vai apagar todos os lançamentos salvos. Deseja continuar?")) {
+  // Antes isto zerava só `transactions`, apesar de o botão dizer "Limpar todos
+  // os dados". Agora o usuário escolhe bloco a bloco, e os comprovantes dos
+  // lançamentos apagados saem junto (senão viram lixo invisível no bucket).
+  const resetAllData = async (blocos = { lancamentos: true }) => {
+    if (blocos.lancamentos) {
+      const comAnexo = transactions.filter((t) => t.attachmentPath);
+      for (const t of comAnexo) {
+        try { await deleteReceipt(t.attachmentPath); } catch (e) { /* segue */ }
+      }
       setTransactions([]);
     }
+    if (blocos.contas_fixas) setFixedBills([]);
+    if (blocos.caixinhas) setSavingsAccounts([]);
+    if (blocos.dividas) setDebts([]);
+    if (blocos.orcamentos) setBudgets([]);
+    if (blocos.categorias) {
+      setCustomCategories([]);
+      setHiddenDefaultCategories([]);
+      setCategoryOrder({ receita: [], despesa: [] });
+    }
+    if (blocos.contas) {
+      setCustomBanks([]);
+      setHiddenDefaultBanks([]);
+      setBankOrder([]);
+    }
+    setToast({ message: "Dados apagados." });
   };
 
   const handleAddCategory = () => {
@@ -1094,16 +1252,59 @@ export default function App() {
     setCategoryError("");
   };
 
-  const handleDeleteCategory = (cat) => {
+  // Remapeia tudo que aponta para uma categoria antes de ela sumir. Sem isso o
+  // findCategory cai no fallback e o relatório passa a mostrar "custom_k3f9x2".
+  const remapearCategoria = (deId, paraId) => {
+    if (!paraId || deId === paraId) return;
+    setTransactions((prev) => prev.map((t) => (t.category === deId ? { ...t, category: paraId } : t)));
+    setFixedBills((prev) => prev.map((b) => (b.category === deId ? { ...b, category: paraId } : b)));
+    setBudgets((prev) => prev.map((o) => (o.categoryId === deId ? { ...o, categoryId: paraId } : o)));
+  };
+
+  const handleDeleteCategory = (cat, destinoId = null) => {
+    if (destinoId) remapearCategoria(cat.id, destinoId);
     const isCustom = customCategories.some((c) => c.id === cat.id);
     if (isCustom) {
       setCustomCategories((prev) => prev.filter((c) => c.id !== cat.id));
     } else {
       setHiddenDefaultCategories((prev) => [...prev, cat.id]);
     }
+    setCategoryOrder((prev) => ({
+      receita: (prev.receita || []).filter((id) => id !== cat.id),
+      despesa: (prev.despesa || []).filter((id) => id !== cat.id),
+    }));
   };
 
-  const handleRestoreDefaultCategories = () => setHiddenDefaultCategories([]);
+  // Arquivar some dos seletores mas mantém o nome nos lançamentos antigos.
+  const handleArchiveCategory = (cat, arquivar = true) => {
+    const isCustom = customCategories.some((c) => c.id === cat.id);
+    if (isCustom) {
+      setCustomCategories((prev) => prev.map((c) => (c.id === cat.id ? { ...c, arquivada: arquivar } : c)));
+    } else if (arquivar) {
+      setHiddenDefaultCategories((prev) => (prev.includes(cat.id) ? prev : [...prev, cat.id]));
+    }
+  };
+
+  const idsCategoriasPadrao = useMemo(
+    () => new Set([...CATEGORIES.receita, ...CATEGORIES.despesa].map((c) => c.id)),
+    []
+  );
+
+  // Editar uma categoria padrão guarda um clone com o MESMO id e esconde a
+  // original. Restaurar sem tirar o clone fazia as duas aparecerem juntas, com
+  // chave React repetida. Por isso o filtro abaixo.
+  const handleRestoreDefaultCategories = () => {
+    setCustomCategories((prev) => prev.filter((c) => !idsCategoriasPadrao.has(c.id)));
+    setHiddenDefaultCategories([]);
+  };
+
+  // Só desfaz a personalização visual, mantendo removidas as que foram de fato removidas.
+  const handleResetCategoryAppearance = () => {
+    const personalizadas = customCategories.filter((c) => idsCategoriasPadrao.has(c.id)).map((c) => c.id);
+    if (personalizadas.length === 0) return;
+    setCustomCategories((prev) => prev.filter((c) => !idsCategoriasPadrao.has(c.id)));
+    setHiddenDefaultCategories((prev) => prev.filter((id) => !personalizadas.includes(id)));
+  };
 
   const handleSortCategories = (tipo) => {
     const ordenadas = [...categoriesByType[tipo]]
@@ -1152,29 +1353,122 @@ export default function App() {
     const label = bankForm.label.trim();
     if (!label) { setBankError("Dê um nome para o banco ou conta."); return; }
     if (banksList.some((b) => b.label.toLowerCase() === label.toLowerCase())) { setBankError("Já existe um banco com esse nome."); return; }
-    const inicial = parseFloat(String(bankForm.initialBalance).replace(",", ".")) || 0;
     const ehCartao = bankForm.kind === "cartao";
+    const fecha = clampDia(bankForm.closingDay);
+    const vence = clampDia(bankForm.dueDay);
+    if (ehCartao && bankForm.closingDay && fecha === null) { setBankError("O dia de fechamento precisa estar entre 1 e 31."); return; }
+    if (ehCartao && bankForm.dueDay && vence === null) { setBankError("O dia de vencimento precisa estar entre 1 e 31."); return; }
+    const inicial = parseMoedaBR(bankForm.initialBalance);
+    const limite = parseMoedaBR(bankForm.creditLimit);
     setCustomBanks((prev) => [...prev, {
       id: `banco_${uid()}`, label, color: bankForm.color,
       initialBalance: ehCartao ? 0 : inicial,
       kind: bankForm.kind,
-      closingDay: ehCartao ? (parseInt(bankForm.closingDay, 10) || null) : null,
-      dueDay: ehCartao ? (parseInt(bankForm.dueDay, 10) || null) : null,
+      closingDay: ehCartao ? fecha : null,
+      dueDay: ehCartao ? vence : null,
+      creditLimit: ehCartao && limite > 0 ? limite : null,
     }]);
-    setBankForm({ label: "", color: COLOR_PALETTE[0], initialBalance: "", kind: "conta", closingDay: "", dueDay: "" });
+    setBankForm({ label: "", color: COLOR_PALETTE[0], initialBalance: "", kind: "conta", closingDay: "", dueDay: "", creditLimit: "" });
     setBankError("");
   };
 
-  const handleDeleteBank = (bank) => {
+  const remapearConta = (deId, paraId) => {
+    if (!paraId || deId === paraId) return;
+    setTransactions((prev) => prev.map((t) => {
+      if (t.account !== deId && t.toAccount !== deId) return t;
+      const novo = { ...t };
+      if (novo.account === deId) novo.account = paraId;
+      if (novo.toAccount === deId) novo.toAccount = paraId;
+      return novo;
+    }));
+    setFixedBills((prev) => prev.map((b) => (b.account === deId ? { ...b, account: paraId } : b)));
+    setBudgets((prev) => prev.map((o) => (o.accountId === deId ? { ...o, accountId: paraId } : o)));
+  };
+
+  const handleDeleteBank = (bank, destinoId = null) => {
+    if (destinoId) remapearConta(bank.id, destinoId);
     const isCustom = customBanks.some((b) => b.id === bank.id);
     if (isCustom) {
       setCustomBanks((prev) => prev.filter((b) => b.id !== bank.id));
     } else {
       setHiddenDefaultBanks((prev) => [...prev, bank.id]);
     }
+    setBankOrder((prev) => prev.filter((id) => id !== bank.id));
   };
 
-  const handleRestoreDefaultBanks = () => setHiddenDefaultBanks([]);
+  const handleArchiveBank = (bank, arquivar = true) => {
+    const isCustom = customBanks.some((b) => b.id === bank.id);
+    if (isCustom) {
+      setCustomBanks((prev) => prev.map((b) => (b.id === bank.id ? { ...b, arquivado: arquivar } : b)));
+    } else if (arquivar) {
+      // Padrão não tem onde guardar a flag: arquivar equivale a esconder.
+      setHiddenDefaultBanks((prev) => (prev.includes(bank.id) ? prev : [...prev, bank.id]));
+    }
+  };
+
+  const idsBancosPadrao = useMemo(() => new Set(DEFAULT_BANKS.map((b) => b.id)), []);
+
+  const handleRestoreDefaultBanks = () => {
+    setCustomBanks((prev) => prev.filter((b) => !idsBancosPadrao.has(b.id)));
+    setHiddenDefaultBanks([]);
+  };
+
+  const handleResetBankAppearance = () => {
+    const personalizados = customBanks.filter((b) => idsBancosPadrao.has(b.id)).map((b) => b.id);
+    if (personalizados.length === 0) return;
+    setCustomBanks((prev) => prev.filter((b) => !idsBancosPadrao.has(b.id)));
+    setHiddenDefaultBanks((prev) => prev.filter((id) => !personalizados.includes(id)));
+  };
+
+  // "Removido" e "personalizado" viravam o mesmo número no contador antigo:
+  // quem só renomeasse "Moradia" via "Restaurar 1 padrão removido" sem ter
+  // removido nada. Aqui os dois casos ficam separados.
+  const categoriasPadraoPersonalizadas = useMemo(
+    () => customCategories.filter((c) => idsCategoriasPadrao.has(c.id)).map((c) => c.id),
+    [customCategories, idsCategoriasPadrao]
+  );
+  const categoriasPadraoRemovidas = useMemo(
+    () => hiddenDefaultCategories.filter((id) => !categoriasPadraoPersonalizadas.includes(id)),
+    [hiddenDefaultCategories, categoriasPadraoPersonalizadas]
+  );
+  const bancosPadraoPersonalizados = useMemo(
+    () => customBanks.filter((b) => idsBancosPadrao.has(b.id)).map((b) => b.id),
+    [customBanks, idsBancosPadrao]
+  );
+  const bancosPadraoRemovidos = useMemo(
+    () => hiddenDefaultBanks.filter((id) => !bancosPadraoPersonalizados.includes(id)),
+    [hiddenDefaultBanks, bancosPadraoPersonalizados]
+  );
+
+  // A mensagem de erro some assim que o usuário volta a digitar.
+  const atualizarCategoryForm = (novo) => {
+    setCategoryForm(novo);
+    if (categoryError) setCategoryError("");
+  };
+  const atualizarBankForm = (novo) => {
+    setBankForm(novo);
+    if (bankError) setBankError("");
+  };
+
+  const handleSortBanks = () => {
+    setBankOrder([...banksList].sort((a, b) => a.label.localeCompare(b.label, "pt-BR")).map((b) => b.id));
+  };
+
+  // A tela mostra contas e cartões em blocos separados. Sem o escopo, mover
+  // "para baixo" no último cartão trocaria de lugar com uma conta e o item
+  // pularia de bloco sem explicação.
+  const handleMoveBank = (id, direcao, escopoIds = null) => {
+    const atual = banksList.map((b) => b.id);
+    const escopo = escopoIds && escopoIds.length ? escopoIds : atual;
+    const idxE = escopo.indexOf(id);
+    const alvoE = idxE + direcao;
+    if (idxE < 0 || alvoE < 0 || alvoE >= escopo.length) return;
+    const i = atual.indexOf(id);
+    const j = atual.indexOf(escopo[alvoE]);
+    if (i < 0 || j < 0) return;
+    [atual[i], atual[j]] = [atual[j], atual[i]];
+    setBankOrder(atual);
+  };
 
   const resetFixedForm = () => { setFixedForm(emptyFixedForm); setEditingFixedId(null); setFixedFormError(""); };
   const openNewFixedForm = () => { resetFixedForm(); setShowFixedForm(true); };
@@ -1190,7 +1484,7 @@ export default function App() {
   const handleFixedTypeChange = (type) => setFixedForm((f) => ({ ...f, type, category: "" }));
 
   const handleSubmitFixed = () => {
-    const amountNum = parseFloat(String(fixedForm.amount).replace(",", "."));
+    const amountNum = parseMoedaBR(fixedForm.amount);
     const dayNum = parseInt(fixedForm.dueDay, 10);
     if (!fixedForm.description.trim()) { setFixedFormError("Dê uma descrição para a conta fixa."); return; }
     if (!amountNum || amountNum <= 0) { setFixedFormError("Informe um valor maior que zero."); return; }
@@ -1403,9 +1697,24 @@ export default function App() {
     }));
   };
 
-  const handleExportBackup = () => {
-    const payload = {
+  const montarBackup = () => {
+    const anexos = transactions.filter((t) => t.attachmentPath).map((t) => t.attachmentPath);
+    return {
+      versao: 2,
+      app: "razao",
       exportedAt: new Date().toISOString(),
+      resumo: {
+        lancamentos: transactions.length,
+        contas: customBanks.length,
+        contas_fixas: fixedBills.length,
+        caixinhas: savingsAccounts.length,
+        dividas: debts.length,
+        orcamentos: budgets.length,
+        anexos: anexos.length,
+      },
+      // Os arquivos em si moram no bucket do Supabase e NÃO cabem neste JSON.
+      // A lista serve para conferir o que ficou para trás ao restaurar noutra conta.
+      anexos_referenciados: anexos,
       data: {
         lancamentos: transactions,
         categorias_personalizadas: customCategories,
@@ -1413,6 +1722,7 @@ export default function App() {
         ordem_categorias: categoryOrder,
         bancos_personalizados: customBanks,
         bancos_padrao_ocultos: hiddenDefaultBanks,
+        ordem_bancos: bankOrder,
         contas_fixas: fixedBills,
         orcamentos: budgets,
         poupanca: savingsAccounts,
@@ -1420,41 +1730,77 @@ export default function App() {
         tema_cores: theme,
       },
     };
+  };
+
+  const baixarJson = (payload, nome) => {
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `razao-backup-${todayISO()}.json`;
+    a.download = nome;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
 
-  const handleImportBackup = (file) => {
-    if (!window.confirm("Isso vai substituir TODOS os seus dados atuais pelos do backup. Deseja continuar?")) return;
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const parsed = JSON.parse(e.target.result);
-        const d = parsed.data || parsed;
-        if (d.lancamentos) setTransactions(d.lancamentos);
-        if (d.categorias_personalizadas) setCustomCategories(d.categorias_personalizadas);
-        if (d.categorias_padrao_ocultas) setHiddenDefaultCategories(d.categorias_padrao_ocultas);
-        if (d.ordem_categorias) setCategoryOrder(d.ordem_categorias);
-        if (d.bancos_personalizados) setCustomBanks(d.bancos_personalizados);
-        if (d.bancos_padrao_ocultos) setHiddenDefaultBanks(d.bancos_padrao_ocultos);
-        if (d.contas_fixas) setFixedBills(d.contas_fixas);
-        if (d.orcamentos) setBudgets(d.orcamentos);
-        if (d.poupanca) setSavingsAccounts(d.poupanca);
-        if (d.dividas) setDebts(d.dividas);
-        if (d.tema_cores) setTheme(d.tema_cores);
-        setBackupMessage({ type: "success", text: "Backup importado com sucesso!" });
-      } catch (err) {
-        setBackupMessage({ type: "error", text: "Arquivo inválido. Verifique se é um backup do Razão (.json)." });
-      }
+  const handleExportBackup = () => {
+    baixarJson(montarBackup(), `razao-backup-${todayISO()}.json`);
+    setUltimoBackup(new Date().toISOString());
+    storage.set("ultimo_backup", new Date().toISOString()).catch(() => {});
+  };
+
+  // Aplica um backup já lido e validado pela tela de Backup.
+  // modo "substituir" troca tudo; modo "mesclar" soma o que não existe ainda.
+  const handleApplyBackup = (parsed, modo = "substituir") => {
+    const d = (parsed && parsed.data) || parsed || {};
+    const lista = (v) => (Array.isArray(v) ? v : null);
+
+    // Rede de segurança: baixa o estado atual antes de mexer em qualquer coisa.
+    try { baixarJson(montarBackup(), `razao-antes-de-restaurar-${todayISO()}.json`); } catch (e) { /* segue */ }
+
+    const juntar = (atual, novo, chave = "id") => {
+      const vistos = new Set(atual.map((x) => x[chave]));
+      return [...atual, ...novo.filter((x) => !vistos.has(x[chave]))];
     };
-    reader.readAsText(file);
+    const aplicar = (novo, atual, setter) => {
+      const arr = lista(novo);
+      if (!arr) return 0;
+      setter(modo === "mesclar" ? juntar(atual, arr) : arr);
+      return arr.length;
+    };
+
+    try {
+      const n = aplicar(d.lancamentos, transactions, setTransactions);
+      aplicar(d.categorias_personalizadas, customCategories, setCustomCategories);
+      aplicar(d.contas_fixas, fixedBills, setFixedBills);
+      aplicar(d.orcamentos, budgets, setBudgets);
+      aplicar(d.poupanca, savingsAccounts, setSavingsAccounts);
+      aplicar(d.dividas, debts, setDebts);
+      aplicar(d.bancos_personalizados, customBanks, setCustomBanks);
+
+      if (modo === "substituir") {
+        setHiddenDefaultCategories(lista(d.categorias_padrao_ocultas) || []);
+        setHiddenDefaultBanks(lista(d.bancos_padrao_ocultos) || []);
+        setBankOrder(lista(d.ordem_bancos) || []);
+        if (d.ordem_categorias && typeof d.ordem_categorias === "object") {
+          setCategoryOrder({
+            receita: lista(d.ordem_categorias.receita) || [],
+            despesa: lista(d.ordem_categorias.despesa) || [],
+          });
+        }
+        if (d.tema_cores && typeof d.tema_cores === "object") setTheme({ ...DEFAULT_THEME, ...d.tema_cores });
+      }
+
+      const faltando = (parsed?.anexos_referenciados || []).length;
+      setBackupMessage({
+        type: "success",
+        text: `Backup ${modo === "mesclar" ? "mesclado" : "restaurado"}: ${n} lançamento${n !== 1 ? "s" : ""}.`
+          + (faltando ? ` ${faltando} comprovante(s) continuam no projeto de origem.` : ""),
+      });
+    } catch (err) {
+      setBackupMessage({ type: "error", text: "Não foi possível aplicar este backup." });
+    }
   };
 
   const handleConfirmCsvImport = (rows, account, status) => {
@@ -1473,7 +1819,7 @@ export default function App() {
     const ehConta = budgetForm.kind === "conta";
     const alvo = ehConta ? budgetForm.accountId : budgetForm.categoryId;
     if (!alvo) { setBudgetError(ehConta ? "Selecione uma conta ou cartão." : "Selecione uma categoria."); return; }
-    const limitNum = parseFloat(String(budgetForm.limit).replace(",", "."));
+    const limitNum = parseMoedaBR(budgetForm.limit);
     if (!limitNum || limitNum <= 0) { setBudgetError("Informe um limite maior que zero."); return; }
     const jaExiste = budgets.some((b) => (ehConta ? b.kind === "conta" && b.accountId === alvo : b.kind !== "conta" && b.categoryId === alvo));
     if (jaExiste) { setBudgetError(ehConta ? "Essa conta já tem um orçamento definido." : "Essa categoria já tem um orçamento definido."); return; }
@@ -1625,33 +1971,64 @@ export default function App() {
           />
         ) : activeTab === "config" ? (
           <ConfiguracoesTab
+            subTab={configSubTab}
+            setSubTab={setConfigSubTab}
             theme={theme}
             setTheme={setTheme}
+            seguirSistema={seguirSistema}
+            setSeguirSistema={setSeguirSistema}
             categoriesByType={categoriesByType}
             customCategories={customCategories}
+            categoriasArquivadas={categoriasArquivadas}
             categoryForm={categoryForm}
-            setCategoryForm={setCategoryForm}
+            setCategoryForm={atualizarCategoryForm}
             categoryError={categoryError}
+            usoPorCategoria={usoPorCategoria}
             onAddCategory={handleAddCategory}
             onDeleteCategory={handleDeleteCategory}
+            onArchiveCategory={handleArchiveCategory}
             onUpdateCategory={handleUpdateCategory}
             onSortCategories={handleSortCategories}
             onMoveCategory={handleMoveCategory}
-            hiddenCategoriesCount={hiddenDefaultCategories.length}
+            hiddenCategoriesCount={categoriasPadraoRemovidas.length}
+            personalizedCategoriesCount={categoriasPadraoPersonalizadas.length}
             onRestoreCategories={handleRestoreDefaultCategories}
+            onResetCategoryAppearance={handleResetCategoryAppearance}
             banksList={banksList}
             customBanks={customBanks}
+            bancosArquivados={bancosArquivados}
             bankForm={bankForm}
-            setBankForm={setBankForm}
+            setBankForm={atualizarBankForm}
             bankError={bankError}
+            usoPorConta={usoPorConta}
             onAddBank={handleAddBank}
             onDeleteBank={handleDeleteBank}
+            onArchiveBank={handleArchiveBank}
             onUpdateBank={handleUpdateBank}
-            hiddenBanksCount={hiddenDefaultBanks.length}
+            onSortBanks={handleSortBanks}
+            onMoveBank={handleMoveBank}
+            hiddenBanksCount={bancosPadraoRemovidos.length}
+            personalizedBanksCount={bancosPadraoPersonalizados.length}
             onRestoreBanks={handleRestoreDefaultBanks}
+            onResetBankAppearance={handleResetBankAppearance}
             onExportBackup={handleExportBackup}
-            onImportBackup={handleImportBackup}
+            onApplyBackup={handleApplyBackup}
             backupMessage={backupMessage}
+            setBackupMessage={setBackupMessage}
+            ultimoBackup={ultimoBackup}
+            resumoDados={{
+              lancamentos: transactions.length,
+              contas_fixas: fixedBills.length,
+              caixinhas: savingsAccounts.length,
+              dividas: debts.length,
+              orcamentos: budgets.length,
+              categorias: customCategories.length,
+              contas: customBanks.length,
+            }}
+            householdMembers={householdMembers}
+            householdMemberCount={householdMemberCount}
+            onReloadMembers={carregarMembros}
+            currentUserEmail={currentUserEmail}
             onResetData={resetAllData}
           />
         ) : activeTab === "relatorios" ? (
@@ -1861,7 +2238,7 @@ export default function App() {
             {showCsvImport && (
               <CsvImportModal
                 categoriesByType={categoriesByType}
-                banksList={banksList}
+                banksList={banksParaSelecao}
                 onConfirm={handleConfirmCsvImport}
                 onCancel={() => setShowCsvImport(false)}
                 categoryMemory={categoryMemory}
@@ -1979,11 +2356,11 @@ export default function App() {
                   );
                   const avatarBadge = householdMemberCount > 1 && (
                     <span
-                      title={t.createdBy || "Desconhecido"}
+                      title={nomeDe(t.createdBy)}
                       className="rz-mono text-[9px] font-semibold w-5 h-5 rounded-full flex items-center justify-center shrink-0"
                       style={{ background: colorForEmail(t.createdBy), color: "#fff" }}
                     >
-                      {t.createdBy ? t.createdBy[0].toUpperCase() : "?"}
+                      {t.createdBy ? nomeDe(t.createdBy)[0].toUpperCase() : "?"}
                     </span>
                   );
                   const editDeleteBtns = (
@@ -2182,7 +2559,7 @@ export default function App() {
                         <input type="number" min="2" max="60" className="rz-input rz-focus rz-mono" value={form.installmentCount} onChange={(e) => setForm({ ...form, installmentCount: e.target.value })} />
                       </div>
                       {(() => {
-                        const total = parseFloat(String(form.amount).replace(",", "."));
+                        const total = parseMoedaBR(form.amount);
                         const count = parseInt(form.installmentCount, 10);
                         if (!total || !count || count < 2) return null;
                         const per = Math.round((total / count) * 100) / 100;
@@ -2287,14 +2664,14 @@ export default function App() {
                       <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>De (origem)</label>
                       <select className="rz-input rz-focus" value={form.account} onChange={(e) => setForm({ ...form, account: e.target.value })}>
                         <option value="" disabled>Selecione</option>
-                        {banksList.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
+                        {banksParaSelecao.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
                       </select>
                     </div>
                     <div className="flex-1">
                       <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Para (destino)</label>
                       <select className="rz-input rz-focus" value={form.toAccount} onChange={(e) => setForm({ ...form, toAccount: e.target.value })}>
                         <option value="" disabled>Selecione</option>
-                        {banksList.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
+                        {banksParaSelecao.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
                       </select>
                     </div>
                   </div>
@@ -2315,7 +2692,7 @@ export default function App() {
                     <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Banco / Conta (opcional)</label>
                     <select className="rz-input rz-focus" value={form.account} onChange={(e) => setForm({ ...form, account: e.target.value })}>
                       <option value="">Nenhum selecionado</option>
-                      {banksList.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
+                      {banksParaSelecao.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
                     </select>
                   </div>
                   <div className="flex-1">
