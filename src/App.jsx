@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { BookOpen, Receipt, Plus, Trash2, Pencil, X, Check, Search, TrendingUp, TrendingDown, Scale, Undo2, Menu, LogOut, FileUp, FileDown, Copy, Paperclip, Loader2, Layers, Repeat } from "lucide-react";
 import { storage } from "./storage";
 import { supabase } from "./supabaseClient";
-import { uploadReceipt, getReceiptUrl, deleteReceipt } from "./receipts";
+import { uploadReceipt, getReceiptUrl, deleteReceipt, validarComprovante } from "./receipts";
 import { CATEGORIES, DEFAULT_BANKS, NAV_ITEMS, COLOR_PALETTE, DEFAULT_SAVINGS_SEED, DEFAULT_THEME, THEME_PRESETS, emptyForm, emptyFixedForm, emptyDebtForm } from "./lib/constants";
 import { uid, todayISO, formatCurrency, formatDateBR, dateToISO, colorForEmail, isDarkTheme, parseMoedaBR, clampDia } from "./lib/format";
 import { downloadCsv, chaveDuplicata, buildCategoryMemory, normalizeDesc, addMonthsToDateISO } from "./lib/csv";
@@ -886,13 +886,20 @@ export default function App() {
 
   const handleAttachmentSelected = async (file) => {
     if (!file) return;
+
+    // Checa antes de subir: arquivo grande ou de tipo errado o bucket recusa
+    // de qualquer jeito, e sem isto o usuário só descobria depois de esperar
+    // o upload — com uma mensagem genérica.
+    const problema = validarComprovante(file);
+    if (problema) { setFormError(problema); return; }
+
     setUploadingAttachment(true);
     setFormError("");
     try {
       const path = await uploadReceipt(file, editingId || pendingId);
       setForm((f) => ({ ...f, attachmentPath: path, attachmentName: file.name }));
     } catch (err) {
-      setFormError("Não foi possível enviar o arquivo. Tente novamente.");
+      setFormError(err?.message || "Não foi possível enviar o arquivo. Tente novamente.");
     } finally {
       setUploadingAttachment(false);
     }
@@ -2094,7 +2101,6 @@ export default function App() {
             categoriesByType={categoriesByType}
             banksList={banksList}
             findBank={findBank}
-            cardIds={cardIds}
           />
         ) : activeTab === "orcamento" ? (
           <OrcamentoTab
@@ -2805,7 +2811,7 @@ export default function App() {
               )}
 
               <div>
-                <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Comprovante / nota fiscal (opcional)</label>
+                <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Comprovante / nota fiscal (opcional, até 10 MB)</label>
                 {form.attachmentPath ? (
                   <div className="flex items-center gap-2">
                     <button type="button" onClick={() => handleOpenAttachment(form.attachmentPath)} className="rz-btn-ghost rz-focus text-xs !py-2 flex items-center gap-1.5 flex-1 min-w-0 justify-start">
@@ -2821,7 +2827,7 @@ export default function App() {
                     {uploadingAttachment ? "Enviando…" : "Anexar foto ou PDF"}
                     <input
                       type="file"
-                      accept="image/*,application/pdf"
+                      accept="image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf"
                       className="hidden"
                       disabled={uploadingAttachment}
                       onChange={(e) => { if (e.target.files[0]) handleAttachmentSelected(e.target.files[0]); e.target.value = ""; }}
