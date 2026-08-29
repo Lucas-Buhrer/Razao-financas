@@ -3,10 +3,10 @@ import { Receipt, Scale, TrendingDown, TrendingUp } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { MONTHS } from "../lib/constants";
 import { formatCompact, formatCurrency, formatDateBR, todayISO } from "../lib/format";
-import { buildCashFlowProjection, getAmountForPeriod, custoMensalEquivalente, periodKeyOf } from "../lib/finance";
+import { buildCashFlowProjection, getAmountForPeriod, custoMensalEquivalente, periodKeyOf, contaNosIndicadores } from "../lib/finance";
 import { RetroLinha, SummaryCard } from "./common";
 
-function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, saldosIniciais, budgets, categoriesByType, banksList, findBank, cardIds }) {
+function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, saldosIniciais, budgets, categoriesByType, banksList, findBank, cardIds, categoriasForaIndicadores = [] }) {
   const [monthsCount, setMonthsCount] = useState(6);
   const [horizonDays, setHorizonDays] = useState(90);
   const [selectedCats, setSelectedCats] = useState([]);
@@ -35,13 +35,48 @@ function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, s
     return Object.entries(byDate).map(([data, saldo]) => ({ data, saldo }));
   }, [savingsAccounts]);
 
+  // Nem todo lançamento é ganho ou gasto de verdade. Ficam de fora dos números
+  // deste relatório:
+  //
+  //   • acertos de dívida (levam `debtId`). Emprestar R$ 100 e receber de volta
+  //     não é receita — e o app sequer registra a saída do empréstimo, só a
+  //     volta. Contar essa volta inventaria uma receita que nunca existiu, e a
+  //     taxa de poupança subiria sem você ter poupado nada.
+  //
+  //   • categorias que você marcou como fora dos indicadores, em
+  //     Configurações → Categorias. Reembolso, venda de um móvel usado: dinheiro
+  //     que entra sem ser ganho.
+  //
+  // Eles continuam inteiros na aba Lançamentos e nos saldos das contas — o que
+  // saiu da conta saiu de verdade. O que muda é só o que estes indicadores
+  // consideram ganho e gasto.
+  const contadas = useMemo(
+    () => transactions.filter((t) => contaNosIndicadores(t, categoriasForaIndicadores)),
+    [transactions, categoriasForaIndicadores]
+  );
+
+  // Quantos ficaram de fora dentro da janela que está sendo exibida — contar
+  // sobre a base inteira daria um número grande e sem relação com o que está
+  // na tela.
+  const excluidas = useMemo(() => {
+    const now = new Date();
+    const inicio = new Date(now.getFullYear(), now.getMonth() - (monthsCount - 1), 1);
+    const fim = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+    return transactions.filter((t) => {
+      if (t.type === "transferencia") return false;
+      if (contaNosIndicadores(t, categoriasForaIndicadores)) return false;
+      const d = new Date(t.date + "T00:00:00");
+      return d >= inicio && d <= fim;
+    }).length;
+  }, [transactions, categoriasForaIndicadores, monthsCount]);
+
   const monthlyData = useMemo(() => {
     const now = new Date();
     const months = [];
     for (let i = monthsCount - 1; i >= 0; i--) months.push(new Date(now.getFullYear(), now.getMonth() - i, 1));
     return months.map((d) => {
       const y = d.getFullYear(), m = d.getMonth();
-      const inMonth = transactions.filter((t) => { const td = new Date(t.date + "T00:00:00"); return td.getFullYear() === y && td.getMonth() === m; });
+      const inMonth = contadas.filter((t) => { const td = new Date(t.date + "T00:00:00"); return td.getFullYear() === y && td.getMonth() === m; });
       const receitas = inMonth.filter((t) => t.type === "receita").reduce((s, t) => s + Number(t.amount), 0);
       const despesas = inMonth.filter((t) => t.type === "despesa").reduce((s, t) => s + Number(t.amount), 0);
       const porCategoria = {};
@@ -52,7 +87,7 @@ function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, s
       });
       return { mes: `${MONTHS[m].slice(0, 3)}/${String(y).slice(2)}`, receitas, despesas, saldo: receitas - despesas, porCategoria, porConta };
     });
-  }, [transactions, monthsCount]);
+  }, [contadas, monthsCount]);
 
   // ---- Indicadores ----
   const indicadores = useMemo(() => {
@@ -136,7 +171,12 @@ function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, s
     setSelectedCats((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   };
 
-  // ---- Gastos por forma de pagamento ----
+  // ---- Saídas por conta ----
+  // Este é o único quadro do relatório que usa `transactions` cru, e não a
+  // lista filtrada: a pergunta que ele responde é "quanto saiu de cada conta",
+  // não "quanto eu gastei". Quitar uma dívida de R$ 500 pelo Nubank não é
+  // consumo — mas os R$ 500 saíram do Nubank, e quem abre este quadro
+  // normalmente está conferindo contra o extrato do banco.
   const porFormaPagamento = useMemo(() => {
     const agora = new Date();
     const inicio = new Date(agora.getFullYear(), agora.getMonth() - (monthsCount - 1), 1);
@@ -177,7 +217,7 @@ function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, s
   }, [transactions]);
 
   const retrospectiva = useMemo(() => {
-    const doAno = transactions.filter((t) => t.date.startsWith(String(anoRetro)) && t.type !== "transferencia");
+    const doAno = contadas.filter((t) => t.date.startsWith(String(anoRetro)) && t.type !== "transferencia");
     if (doAno.length === 0) return null;
 
     const receitas = doAno.filter((t) => t.type === "receita").reduce((s, t) => s + t.amount, 0);
@@ -209,11 +249,11 @@ function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, s
       receitas, despesas, saldo: receitas - despesas, porMes, mesesComDados: mesesComDados.length,
       noVermelho, melhorMes, piorMes, categorias, maiorGasto, totalLancamentos: doAno.length,
     };
-  }, [transactions, anoRetro, findCategory]);
+  }, [contadas, anoRetro, findCategory]);
 
   const customRangeData = useMemo(() => {
     if (!customStart || !customEnd) return null;
-    const inRange = transactions.filter((t) => t.date >= customStart && t.date <= customEnd);
+    const inRange = contadas.filter((t) => t.date >= customStart && t.date <= customEnd);
     const receitas = inRange.filter((t) => t.type === "receita").reduce((s, t) => s + Number(t.amount), 0);
     const despesas = inRange.filter((t) => t.type === "despesa").reduce((s, t) => s + Number(t.amount), 0);
     const byCategory = {};
@@ -222,7 +262,7 @@ function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, s
       .map(([catId, value]) => { const cat = findCategory("despesa", catId); return { name: cat.label, color: cat.color, value }; })
       .sort((a, b) => b.value - a.value).slice(0, 5);
     return { receitas, despesas, saldo: receitas - despesas, count: inRange.length, topCategories };
-  }, [transactions, customStart, customEnd, findCategory]);
+  }, [contadas, customStart, customEnd, findCategory]);
 
   const tooltipStyle = { background: "var(--surface)", border: "1px solid var(--line)", borderRadius: 8, fontSize: 12, fontFamily: "IBM Plex Mono, monospace" };
 
@@ -332,6 +372,17 @@ function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, s
           </p>
         </div>
       </div>
+
+      {/* Número que não fecha com a lista de Lançamentos gera desconfiança.
+          Melhor dizer o que ficou de fora do que deixar o usuário conferindo
+          na mão e achando que o app errou. */}
+      {excluidas > 0 && (
+        <p className="text-xs mb-6 -mt-2" style={{ color: "var(--ink-soft)" }}>
+          {excluidas} lançamento{excluidas > 1 ? "s" : ""} de fora destes números:
+          acertos de dívida e categorias que você desmarcou em Configurações →
+          Categorias. Eles continuam na aba Lançamentos e no saldo das contas.
+        </p>
+      )}
 
       {/* Evolução por categoria */}
       {mediaPorCategoria.length > 0 && (
@@ -533,12 +584,15 @@ function ReportsTab({ transactions, findCategory, fixedBills, savingsAccounts, s
         </div>
       )}
 
-      {/* Gastos por forma de pagamento */}
+      {/* Saídas por conta */}
       {porFormaPagamento.length > 0 && (
         <div className="rz-card p-4 sm:p-5 mb-6">
-          <h2 className="text-sm font-semibold mb-1">Gastos por forma de pagamento</h2>
+          <h2 className="text-sm font-semibold mb-1">Saídas por conta</h2>
           <p className="text-xs mb-4" style={{ color: "var(--ink-soft)" }}>
-            Onde seu dinheiro passou nos últimos {monthsCount} meses, e no que foi gasto em cada lugar.
+            Tudo que saiu de cada conta nos últimos {monthsCount} meses, e em que foi parar.
+            Diferente dos indicadores acima, aqui entram também os acertos de dívida e as
+            categorias que você tirou dos indicadores — o dinheiro saiu da conta, então aparece.
+            É este quadro que bate com o extrato do banco.
           </p>
           <div className="flex flex-col gap-4">
             {porFormaPagamento.map((f) => (

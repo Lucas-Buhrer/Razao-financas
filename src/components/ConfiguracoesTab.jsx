@@ -113,6 +113,7 @@ function ConfiguracoesTab({
   theme, setTheme, seguirSistema, setSeguirSistema,
   categoriesByType, customCategories, categoriasArquivadas, categoryForm, setCategoryForm, categoryError, usoPorCategoria,
   onAddCategory, onDeleteCategory, onArchiveCategory, onUpdateCategory, onSortCategories, onMoveCategory,
+  categoriasForaIndicadores = [], onToggleCategoriaIndicador,
   hiddenCategoriesCount, personalizedCategoriesCount, onRestoreCategories, onResetCategoryAppearance,
   banksList, customBanks, bancosArquivados, bankForm, setBankForm, bankError, usoPorConta,
   onAddBank, onDeleteBank, onArchiveBank, onUpdateBank, onSortBanks, onMoveBank,
@@ -202,6 +203,14 @@ function ConfiguracoesTab({
             personalizadosCount={personalizedCategoriesCount}
             onRestore={onRestoreCategories}
             onResetAppearance={onResetCategoryAppearance}
+          />
+        )}
+
+        {subTab === "categorias" && (
+          <IndicadoresSection
+            categoriesByType={categoriesByType}
+            fora={categoriasForaIndicadores}
+            onToggle={onToggleCategoriaIndicador}
           />
         )}
 
@@ -532,7 +541,10 @@ function CategoriasTab({
         </div>
       )}
 
-      <div className="grid sm:grid-cols-2 gap-4">
+      {/* Um bloco embaixo do outro, cada um na largura inteira — como "Nova
+          categoria" e "O que conta nos Relatórios". Lado a lado, 3 receitas ao
+          lado de 12 despesas deixavam meia tela vazia. */}
+      <div className="flex flex-col gap-6">
         {colunas.map(({ tipo, titulo, lista, completa }) => (
           <div key={tipo}>
             <div className="flex items-center justify-between mb-2 gap-2">
@@ -594,6 +606,88 @@ function CategoriasTab({
           onConfirm={(destino) => { onDelete(aExcluir.cat, destino); setAExcluir(null); }}
         />
       )}
+    </div>
+  );
+}
+
+/* ------------------------------------------- O que conta nos indicadores */
+
+// Nem todo dinheiro que entra é ganho, e nem todo que sai é gasto. Um amigo
+// devolvendo os R$ 100 que você emprestou não é receita — mas cai na conta como
+// se fosse, e a taxa de poupança sobe sem você ter poupado nada.
+//
+// Acertos de dívida o app já reconhece e desconta sozinho. Este cartão é para o
+// resto: reembolso do trabalho, venda de um móvel usado, dinheiro que só passou.
+function IndicadoresSection({ categoriesByType, fora, onToggle }) {
+  // Receitas e Despesas ficam um abaixo do outro, cada um ocupando a largura
+  // inteira e fluindo em colunas. Lado a lado, 3 receitas ao lado de 12
+  // despesas deixavam metade do cartão vazia; assim cada bloco usa o espaço
+  // que tem e o vazio some.
+  const linha = (c) => {
+    const conta = !fora.includes(c.id);
+    return (
+      <button
+        key={c.id}
+        type="button"
+        onClick={() => onToggle(c.id)}
+        aria-pressed={conta}
+        className="rz-focus flex items-start gap-2.5 text-sm py-1.5 text-left w-full break-inside-avoid"
+        title={conta
+          ? `"${c.label}" conta nos indicadores. Clique para tirar.`
+          : `"${c.label}" está fora dos indicadores. Clique para voltar a contar.`}
+      >
+        <span style={{
+          width: 16, height: 16, borderRadius: 4, border: "1.5px solid var(--line)",
+          background: conta ? "var(--ink)" : "var(--surface)",
+          display: "inline-flex", alignItems: "center", justifyContent: "center",
+          flexShrink: 0, marginTop: 2,
+        }}>
+          {conta && <Check size={12} color="var(--paper)" />}
+        </span>
+        <span className="rz-dot mt-1.5" style={{ background: c.color, opacity: conta ? 1 : 0.35 }} />
+        {/* Sem `truncate`: numa coluna estreita, "Transferencia Nubank > Itau"
+            viraria "Transferenci…" — e é justamente pelo nome que se decide se
+            a categoria conta ou não. Melhor quebrar em duas linhas. */}
+        <span style={{
+          color: conta ? "var(--ink)" : "var(--ink-soft)",
+          textDecoration: conta ? "none" : "line-through",
+        }}>
+          {c.label}
+        </span>
+      </button>
+    );
+  };
+
+  const nomesFora = [...categoriesByType.receita, ...categoriesByType.despesa]
+    .filter((c) => fora.includes(c.id))
+    .map((c) => c.label);
+
+  return (
+    <div className="rz-card p-5 mt-6">
+      <h2 className="text-sm font-semibold mb-1">O que conta nos Relatórios</h2>
+      <p className="text-xs mb-4" style={{ color: "var(--ink-soft)" }}>
+        Clique numa categoria para tirá-la da taxa de poupança, das médias mensais e
+        dos gráficos. Ela continua normal na aba Lançamentos, no saldo das contas e
+        em Saídas por conta — o dinheiro entrou e saiu de verdade, só não é ganho
+        nem gasto para efeito de indicador.
+      </p>
+
+      <div className="mb-4">
+        <h3 className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: "var(--ink-soft)" }}>Receitas</h3>
+        <div className="columns-2 sm:columns-3 gap-x-8">{categoriesByType.receita.map(linha)}</div>
+      </div>
+
+      <div>
+        <h3 className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: "var(--ink-soft)" }}>Despesas</h3>
+        <div className="columns-2 sm:columns-3 gap-x-8">{categoriesByType.despesa.map(linha)}</div>
+      </div>
+
+      <div className="mt-4 pt-3 text-xs" style={{ borderTop: "1px solid var(--line)", color: "var(--ink-soft)" }}>
+        {nomesFora.length === 0
+          ? "Todas as categorias estão contando."
+          : `Fora dos indicadores: ${nomesFora.join(", ")}.`}
+        {" "}Acertos de dívida já saem sozinhos, sem precisar marcar nada aqui.
+      </div>
     </div>
   );
 }

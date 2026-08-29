@@ -20,6 +20,24 @@ export function getAmountForPeriod(bill, refDate) {
   return applicable.amount;
 }
 
+// Este lançamento representa ganho ou gasto de verdade?
+//
+// Usado só pelos indicadores do Relatórios — saldo por conta e projeção de caixa
+// continuam contando tudo, porque ali o que importa é onde o dinheiro está.
+//
+// Fica de fora:
+//   • acerto de dívida (tem `debtId`). Emprestar R$ 100 e receber de volta não é
+//     receita. E tem um agravante: registrar o empréstimo não gera lançamento
+//     nenhum, só o acerto gera. Contar a volta sem nunca ter contado a ida faria
+//     o app inventar R$ 100 de receita que nunca existiram, e a taxa de poupança
+//     subiria sem ninguém ter poupado nada.
+//   • categorias que o usuário marcou como fora dos indicadores: reembolso,
+//     venda de um móvel usado, dinheiro que só passou pela conta.
+export function contaNosIndicadores(t, categoriasFora = []) {
+  if (t.debtId) return false;
+  return !categoriasFora.includes(t.category);
+}
+
 // Efeito de um lançamento sobre o total que você tem em contas.
 // Transferência entre contas se anula; para caixinha, o dinheiro sai das contas.
 // Período coberto pela fatura de um cartão num determinado mês.

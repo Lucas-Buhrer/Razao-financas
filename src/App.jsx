@@ -82,6 +82,10 @@ export default function App() {
   const [categoryError, setCategoryError] = useState("");
   const [hiddenDefaultCategories, setHiddenDefaultCategories] = useState([]);
   const [categoryOrder, setCategoryOrder] = useState({ receita: [], despesa: [] });
+  // Categorias que não representam ganho nem gasto de verdade — reembolso,
+  // venda de um móvel usado, dinheiro que só foi e voltou. Continuam normais na
+  // lista de Lançamentos; ficam de fora apenas das contas do Relatórios.
+  const [categoriasForaIndicadores, setCategoriasForaIndicadores] = useState([]);
 
   const [customBanks, setCustomBanks] = useState([]);
   const [banksLoaded, setBanksLoaded] = useState(false);
@@ -282,6 +286,27 @@ export default function App() {
       }
     })();
   }, [categoryOrder, categoriesLoaded]);
+
+  // ---------- Load/save categorias fora dos indicadores ----------
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await storage.get("categorias_fora_indicadores", false);
+        if (res && res.value) setCategoriasForaIndicadores(JSON.parse(res.value));
+      } catch (e) { /* ainda não existe */ }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!categoriesLoaded) return;
+    (async () => {
+      try {
+        await storage.set("categorias_fora_indicadores", JSON.stringify(categoriasForaIndicadores), false);
+      } catch (e) {
+        setLoadError(true);
+      }
+    })();
+  }, [categoriasForaIndicadores, categoriesLoaded]);
 
   // ---------- Load custom banks ----------
   useEffect(() => {
@@ -1146,6 +1171,11 @@ export default function App() {
 
   const handleDeleteDebt = (d) => setDebts((prev) => prev.filter((x) => x.id !== d.id));
 
+  const handleToggleCategoriaIndicador = (catId) => {
+    setCategoriasForaIndicadores((prev) =>
+      prev.includes(catId) ? prev.filter((x) => x !== catId) : [...prev, catId]);
+  };
+
   const handleDebtPayment = (debtId, valor, gerarLancamento, categoria, conta) => {
     const divida = debts.find((d) => d.id === debtId);
     setDebts((prev) => prev.map((d) => {
@@ -1774,6 +1804,7 @@ export default function App() {
         categorias_personalizadas: customCategories,
         categorias_padrao_ocultas: hiddenDefaultCategories,
         ordem_categorias: categoryOrder,
+        categorias_fora_indicadores: categoriasForaIndicadores,
         bancos_personalizados: customBanks,
         bancos_padrao_ocultos: hiddenDefaultBanks,
         ordem_bancos: bankOrder,
@@ -1835,6 +1866,7 @@ export default function App() {
 
       if (modo === "substituir") {
         setHiddenDefaultCategories(lista(d.categorias_padrao_ocultas) || []);
+        setCategoriasForaIndicadores(lista(d.categorias_fora_indicadores) || []);
         setHiddenDefaultBanks(lista(d.bancos_padrao_ocultos) || []);
         setBankOrder(lista(d.ordem_bancos) || []);
         if (d.ordem_categorias && typeof d.ordem_categorias === "object") {
@@ -2048,6 +2080,8 @@ export default function App() {
             onUpdateCategory={handleUpdateCategory}
             onSortCategories={handleSortCategories}
             onMoveCategory={handleMoveCategory}
+            categoriasForaIndicadores={categoriasForaIndicadores}
+            onToggleCategoriaIndicador={handleToggleCategoriaIndicador}
             hiddenCategoriesCount={categoriasPadraoRemovidas.length}
             personalizedCategoriesCount={categoriasPadraoPersonalizadas.length}
             onRestoreCategories={handleRestoreDefaultCategories}
@@ -2101,6 +2135,7 @@ export default function App() {
             categoriesByType={categoriesByType}
             banksList={banksList}
             findBank={findBank}
+            categoriasForaIndicadores={categoriasForaIndicadores}
           />
         ) : activeTab === "orcamento" ? (
           <OrcamentoTab
