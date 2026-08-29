@@ -843,7 +843,7 @@ function BackupSection({ onExport, onApply, message, setMessage, ultimoBackup, r
 
   return (
     <div className="grid lg:grid-cols-2 gap-6">
-      <div className="rz-card p-5 h-fit">
+      <div className="rz-card p-5">
         <h2 className="text-sm font-semibold mb-1">Baixar backup</h2>
         <p className="text-xs mb-3" style={{ color: "var(--ink-soft)" }}>
           Baixa um arquivo com todos os seus dados: lançamentos, categorias, contas, contas fixas, orçamento, caixinhas e dívidas.
@@ -865,7 +865,7 @@ function BackupSection({ onExport, onApply, message, setMessage, ultimoBackup, r
         </p>
       </div>
 
-      <div className="rz-card p-5 h-fit">
+      <div className="rz-card p-5">
         <h2 className="text-sm font-semibold mb-1">Restaurar backup</h2>
         <p className="text-xs mb-4" style={{ color: "var(--ink-soft)" }}>
           Selecione um arquivo exportado anteriormente. Você confere o conteúdo antes de qualquer coisa ser alterada.
@@ -1104,7 +1104,7 @@ function HouseholdSection({ membros, memberCount, onReload, currentUserEmail }) 
       </div>
 
       <div className="grid lg:grid-cols-2 gap-6 mb-4">
-        <div className="rz-card p-5" style={{ alignSelf: "start" }}>
+        <div className="rz-card p-5">
           <h2 className="text-sm font-semibold mb-1">Convidar alguém da família</h2>
           <p className="text-xs mb-4" style={{ color: "var(--ink-soft)" }}>
             Gere um código e compartilhe com quem você quer que veja e edite os mesmos dados financeiros que você.
@@ -1120,7 +1120,7 @@ function HouseholdSection({ membros, memberCount, onReload, currentUserEmail }) 
                   <Copy size={13} /> {copied ? "Copiado!" : "Copiar"}
                 </button>
               </div>
-              <p className="text-xs mt-2" style={{ color: "var(--ink-soft)" }}>Válido por 7 dias, uso único.</p>
+              <p className="text-xs mt-2" style={{ color: "var(--ink-soft)" }}>Válido por 24 horas, uso único.</p>
             </>
           )}
 
@@ -1154,7 +1154,7 @@ function HouseholdSection({ membros, memberCount, onReload, currentUserEmail }) 
           )}
         </div>
 
-        <div className="rz-card p-5" style={{ alignSelf: "start" }}>
+        <div className="rz-card p-5">
           <h2 className="text-sm font-semibold mb-1">Entrar em uma família existente</h2>
           {compartilhando && !mostrarEntrar ? (
             <>
@@ -1380,7 +1380,7 @@ function ContaSection({ onResetData, resumoDados, onExportBackup, onReloadMember
       </div>
 
       <div className="grid lg:grid-cols-2 gap-6">
-        <div className="rz-card p-5 h-fit">
+        <div className="rz-card p-5">
           <h2 className="text-sm font-semibold mb-4">Alterar senha</h2>
           <div className="flex flex-col gap-3">
             <div>

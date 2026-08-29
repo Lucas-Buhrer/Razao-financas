@@ -2499,7 +2499,7 @@ export default function App() {
                             </div>
                             {statusBtn}
                           </div>
-                          <span className="rz-mono text-sm font-semibold shrink-0" style={{ color: corValor }}>
+                          <span className="rz-mono text-sm font-semibold shrink-0 whitespace-nowrap" style={{ color: corValor }}>
                             {sinalValor}{formatCurrency(t.amount)}
                           </span>
                         </div>
@@ -2532,7 +2532,11 @@ export default function App() {
                           {pagoEm}
                         </div>
                         <div className="w-24 shrink-0 flex justify-start">{statusBtn}</div>
-                        <div className="rz-mono text-sm font-semibold w-28 text-right shrink-0" style={{ color: corValor }}>
+                        {/* whitespace-nowrap: sem isto, "+ R$ 15.000,00" não cabe
+                            na coluna e o navegador quebra no espaço depois do
+                            sinal — o "+" ia parar numa linha sozinho, acima do
+                            valor. A largura também subiu de w-28 para w-32. */}
+                        <div className="rz-mono text-sm font-semibold w-32 text-right shrink-0 whitespace-nowrap" style={{ color: corValor }}>
                           {sinalValor}{formatCurrency(t.amount)}
                         </div>
                         <div className="w-6 shrink-0 flex justify-center">{attachmentBtn}</div>

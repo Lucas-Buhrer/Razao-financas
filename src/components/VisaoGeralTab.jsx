@@ -424,7 +424,7 @@ function VisaoGeralTab({
                       <span className={"rz-stamp shrink-0 " + FIXED_STATUS_CLASS[b.status]}>
                         {b.status === "atrasada" && <AlertCircle size={11} />} {FIXED_STATUS_LABEL[b.status]}
                       </span>
-                      <div className="rz-mono text-sm font-semibold w-24 text-right shrink-0" style={{ color: "var(--brick)" }}>{formatCurrency(b.amount)}</div>
+                      <div className="rz-mono text-sm font-semibold w-28 text-right shrink-0 whitespace-nowrap" style={{ color: "var(--brick)" }}>{formatCurrency(b.amount)}</div>
                       <button onClick={() => onLaunchFixedBill(b)} className="rz-btn-ghost rz-focus text-xs !py-1.5 !px-3 shrink-0">Lançar</button>
                     </div>
                   );

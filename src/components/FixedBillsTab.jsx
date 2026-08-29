@@ -181,7 +181,7 @@ function FixedBillsTab({
               {subtitulo}
             </div>
           </div>
-          <div className="w-28 shrink-0">{amountEl}</div>
+          <div className="w-28 shrink-0 whitespace-nowrap">{amountEl}</div>
           {statusEl}
           <div className="justify-end">{actionBtns}</div>
         </div>
@@ -306,7 +306,7 @@ function FixedBillsTab({
                           {encerrada ? "Encerrada em " + b.endPeriod : freq.label + " · não cai neste mês"}
                         </div>
                       </div>
-                      <div className="rz-mono text-sm w-24 text-right shrink-0" style={{ color: "var(--ink-soft)" }}>{formatCurrency(b.amount)}</div>
+                      <div className="rz-mono text-sm w-28 text-right shrink-0 whitespace-nowrap" style={{ color: "var(--ink-soft)" }}>{formatCurrency(b.amount)}</div>
                       <button onClick={() => onOpenEdit(b)} className="rz-focus p-1.5 rounded-md" aria-label="Editar" title="Editar conta fixa" style={{ color: "var(--ink-soft)" }}>
                         <Pencil size={15} />
                       </button>
@@ -333,7 +333,7 @@ function FixedBillsTab({
                         <div className="text-sm truncate">{b.description}</div>
                         <div className="text-xs" style={{ color: "var(--ink-soft)" }}>{cat.label} · Vence dia {b.dueDay}</div>
                       </div>
-                      <div className="rz-mono text-sm w-24 text-right shrink-0" style={{ color: "var(--ink-soft)" }}>{formatCurrency(b.amount)}</div>
+                      <div className="rz-mono text-sm w-28 text-right shrink-0 whitespace-nowrap" style={{ color: "var(--ink-soft)" }}>{formatCurrency(b.amount)}</div>
                       <button onClick={() => onToggleActive(b)} className="rz-focus p-1.5 rounded-md" aria-label="Reativar" title="Reativar esta conta fixa" style={{ color: "var(--emerald)" }}>
                         <PlayCircle size={15} />
                       </button>
@@ -436,7 +436,7 @@ function FixedBillsTab({
                               {varia > 0 ? "+" : ""}{varia.toFixed(0)}%
                             </span>
                           )}
-                          <span className="rz-mono text-sm font-semibold w-24 text-right shrink-0">{formatCurrency(h.amount)}</span>
+                          <span className="rz-mono text-sm font-semibold w-28 text-right shrink-0 whitespace-nowrap">{formatCurrency(h.amount)}</span>
                         </div>
                       );
                     })}
