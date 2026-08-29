@@ -590,11 +590,14 @@ export default function App() {
 
     const novos = aLancar.map((bill) => {
       const dia = Math.min(bill.dueDay, diasNoMes);
+      const dataISO = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
       return {
         id: uid(), description: bill.description,
         amount: getAmountForPeriod(bill, hoje),
-        date: `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}-${String(dia).padStart(2, "0")}`,
+        date: dataISO,
         type: bill.type, category: bill.category, account: bill.account, status: "pago",
+        // Débito automático: o dinheiro sai no próprio dia do vencimento.
+        paymentDate: dataISO,
         recurringId: bill.id, recurringPeriod: period, autoLancado: true, createdBy: currentUserEmail,
       };
     });
@@ -814,9 +817,28 @@ export default function App() {
   // data no futuro entra como pendente, data de hoje ou passada como pago.
   const handleDateChange = (novaData) => {
     setForm((f) => {
-      if (statusTocado || editingId || !novaData) return { ...f, date: novaData };
-      return { ...f, date: novaData, status: novaData > todayISO() ? "pendente" : "pago" };
+      if (!novaData) return { ...f, date: novaData };
+      if (!statusTocado && !editingId) {
+        const pago = novaData <= todayISO();
+        return { ...f, date: novaData, status: pago ? "pago" : "pendente", paymentDate: pago ? novaData : "" };
+      }
+      // A data de pagamento só segue a do lançamento enquanto forem iguais. Se o
+      // usuário já ajustou uma delas à mão, respeitamos o que ele digitou.
+      const acompanha = f.status === "pago" && f.paymentDate === f.date;
+      return { ...f, date: novaData, paymentDate: acompanha ? novaData : f.paymentDate };
     });
+  };
+
+  // A data de pagamento acompanha o status: some quando o lançamento volta a
+  // pendente e reaparece preenchida quando é marcado como pago — com hoje, se
+  // é algo que já existia; com a data do próprio lançamento, se é novo.
+  const handleStatusChange = (novoStatus) => {
+    setForm((f) => ({
+      ...f,
+      status: novoStatus,
+      paymentDate: novoStatus === "pago" ? (f.paymentDate || (editingId ? todayISO() : f.date)) : "",
+    }));
+    setStatusTocado(true);
   };
 
   const handleAddInlineCategory = () => {
@@ -836,6 +858,9 @@ export default function App() {
   const openEditForm = (t) => {
     setForm({
       description: t.description, amount: String(t.amount), date: t.date, type: t.type,
+      // Lançamentos antigos (anteriores a este campo) não têm data de pagamento
+      // guardada; para os que já estão pagos, sugerimos a data do lançamento.
+      paymentDate: t.paymentDate || (t.status === "pago" ? t.date : ""),
       category: t.category, account: t.account || "", toAccount: t.toAccount || "", status: t.status,
       installments: false, installmentCount: "2",
       attachmentPath: t.attachmentPath || null, attachmentName: t.attachmentName || "",
@@ -932,11 +957,15 @@ export default function App() {
       return;
     }
 
+    // Só lançamento pago tem data de pagamento. Se ficou em branco, vale a data
+    // do próprio lançamento.
+    const paymentDate = form.status === "pago" ? (form.paymentDate || form.date) : "";
+
     if (form.type === "transferencia") {
       if (!form.account) { setFormError("Selecione a conta de origem."); return; }
       if (!form.toAccount) { setFormError("Selecione a conta de destino."); return; }
       if (form.account === form.toAccount) { setFormError("Origem e destino precisam ser contas diferentes."); return; }
-      const dados = { ...form, amount: amountNum, category: "", installments: false };
+      const dados = { ...form, amount: amountNum, category: "", installments: false, paymentDate };
       if (editingId) {
         setTransactions((prev) => prev.map((t) => (t.id === editingId ? { ...t, ...dados } : t)));
       } else {
@@ -964,6 +993,8 @@ export default function App() {
           date: addMonthsToDateISO(form.date, i),
           type: form.type, category: form.category, account: form.account,
           status: i === 0 ? form.status : "pendente",
+          // As parcelas seguintes ainda não foram pagas.
+          paymentDate: i === 0 ? paymentDate : "",
           installmentGroupId: groupId, installmentIndex: i + 1, installmentTotal: count,
           createdBy: currentUserEmail,
           attachmentPath: i === 0 ? form.attachmentPath : null,
@@ -981,7 +1012,7 @@ export default function App() {
       const original = transactions.find((t) => t.id === editingId);
       const grupo = aplicarNasParcelas && original?.installmentGroupId ? original.installmentGroupId : null;
       setTransactions((prev) => prev.map((t) => {
-        if (t.id === editingId) return { ...t, ...form, amount: amountNum };
+        if (t.id === editingId) return { ...t, ...form, amount: amountNum, paymentDate };
         // Nas outras parcelas, muda só categoria e conta — descrição, valor e
         // data são específicos de cada uma.
         if (grupo && t.installmentGroupId === grupo) {
@@ -990,7 +1021,7 @@ export default function App() {
         return t;
       }));
     } else {
-      setTransactions((prev) => [...prev, { id: pendingId || uid(), ...form, amount: amountNum, createdBy: currentUserEmail }]);
+      setTransactions((prev) => [...prev, { id: pendingId || uid(), ...form, amount: amountNum, paymentDate, createdBy: currentUserEmail }]);
       checkBudgetAlert(form.category, form.type, form.date, amountNum, form.account);
     }
     setShowForm(false);
@@ -1007,11 +1038,14 @@ export default function App() {
     const novos = pendentes.map((bill) => {
       const day = Math.min(bill.dueDay, daysInMonth);
       const vencimento = new Date(refDate.getFullYear(), refDate.getMonth(), day);
+      const dataISO = `${refDate.getFullYear()}-${String(refDate.getMonth() + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+      const pago = vencimento <= hoje;
       return {
         id: uid(), description: bill.description, amount: bill.amount,
-        date: `${refDate.getFullYear()}-${String(refDate.getMonth() + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
+        date: dataISO,
         type: bill.type, category: bill.category, account: bill.account,
-        status: vencimento > hoje ? "pendente" : "pago",
+        status: pago ? "pago" : "pendente",
+        paymentDate: pago ? dataISO : "",
         recurringId: bill.id, recurringPeriod: period, createdBy: currentUserEmail,
       };
     });
@@ -1027,6 +1061,7 @@ export default function App() {
       description: `${t.description} (cópia)`,
       date: todayISO(),
       status: "pendente",
+      paymentDate: "",
       createdBy: currentUserEmail,
       attachmentPath: null,
       attachmentName: "",
@@ -1047,6 +1082,7 @@ export default function App() {
       Conta: t.account ? (findBank(t.account)?.label || "") : "",
       "Conta destino": t.toAccount ? (findBank(t.toAccount)?.label || "") : "",
       Status: t.status === "pago" ? "Pago" : "Pendente",
+      "Data de pagamento": t.paymentDate ? formatDateBR(t.paymentDate) : "",
       Valor: String(t.amount).replace(".", ","),
     }));
     downloadCsv(rows, filename);
@@ -1058,7 +1094,7 @@ export default function App() {
     if (!window.confirm(`Marcar ${pendentes.length} lançamento${pendentes.length !== 1 ? "s" : ""} como pago?`)) return;
     const ids = new Set(pendentes.map((t) => t.id));
     const avisar = avisarComDesfazer(`${pendentes.length} lançamento${pendentes.length !== 1 ? "s" : ""} marcado${pendentes.length !== 1 ? "s" : ""} como pago.`);
-    setTransactions((prev) => prev.map((t) => (ids.has(t.id) ? { ...t, status: "pago" } : t)));
+    setTransactions((prev) => prev.map((t) => (ids.has(t.id) ? { ...t, status: "pago", paymentDate: t.paymentDate || todayISO() } : t)));
     avisar();
   };
 
@@ -1070,7 +1106,7 @@ export default function App() {
       id: uid(),
       description: quickForm.description.trim() || findCategory(quickForm.type, quickForm.category).label,
       amount: valor, date: todayISO(), type: quickForm.type, category: quickForm.category,
-      account: "", status: "pago", createdBy: currentUserEmail,
+      account: "", status: "pago", paymentDate: todayISO(), createdBy: currentUserEmail,
     }]);
     checkBudgetAlert(quickForm.category, quickForm.type, todayISO(), valor, "");
     setQuickForm({ amount: "", description: "", category: "", type: quickForm.type });
@@ -1119,7 +1155,7 @@ export default function App() {
         description: ehRecebimento ? `Recebido de ${divida.person}` : `Pago a ${divida.person}`,
         amount: valor, date: todayISO(),
         type: ehRecebimento ? "receita" : "despesa",
-        category: categoria, account: conta || "", status: "pago",
+        category: categoria, account: conta || "", status: "pago", paymentDate: todayISO(),
         debtId, createdBy: currentUserEmail,
       }]);
       setToast({ message: "Acerto registrado e lançado na sua conta." });
@@ -1171,7 +1207,9 @@ export default function App() {
     if (selecionados.length === 0) return;
     const ids = new Set(selecionados);
     const avisar = avisarComDesfazer(`${ids.size} lançamento${ids.size !== 1 ? "s" : ""} marcado${ids.size !== 1 ? "s" : ""} como ${novoStatus}.`);
-    setTransactions((prev) => prev.map((t) => (ids.has(t.id) ? { ...t, status: novoStatus } : t)));
+    setTransactions((prev) => prev.map((t) => (ids.has(t.id)
+      ? { ...t, status: novoStatus, paymentDate: novoStatus === "pago" ? (t.paymentDate || todayISO()) : "" }
+      : t)));
     setSelecionados([]);
     avisar();
   };
@@ -1186,8 +1224,14 @@ export default function App() {
     setTypeFilter("todos"); setCategoryFilter("todas"); setAccountFilter("todas"); setSearch("");
   };
 
+  // Marcar como pago pelo selo registra o pagamento hoje; voltar para pendente
+  // apaga a data, porque o dinheiro não saiu.
   const handleTogglePaid = (t) => {
-    setTransactions((prev) => prev.map((x) => (x.id === t.id ? { ...x, status: x.status === "pago" ? "pendente" : "pago" } : x)));
+    setTransactions((prev) => prev.map((x) => {
+      if (x.id !== t.id) return x;
+      const pago = x.status !== "pago";
+      return { ...x, status: pago ? "pago" : "pendente", paymentDate: pago ? todayISO() : "" };
+    }));
   };
 
   const handleDelete = (t) => {
@@ -1562,10 +1606,13 @@ export default function App() {
     const statusPadrao = vencimento > hoje ? "pendente" : "pago";
 
     const valor = valorAjustado !== undefined && valorAjustado !== null ? valorAjustado : bill.amount;
+    const status = statusEscolhido || statusPadrao;
     const newTx = {
       id: uid(), description: bill.description, amount: valor, date: dateISO,
       type: bill.type, category: bill.category, account: bill.account,
-      status: statusEscolhido || statusPadrao,
+      status,
+      // Conta fixa lançada como paga: presume-se paga no dia do vencimento.
+      paymentDate: status === "pago" ? dateISO : "",
       recurringId: bill.id, recurringPeriod: periodKeyOf(refDate), createdBy: currentUserEmail,
     };
     setTransactions((prev) => [...prev, newTx]);
@@ -1674,7 +1721,7 @@ export default function App() {
         toAccount: guardando ? "" : contaId,
         toBox: guardando ? boxId : "",
         fromBox: guardando ? "" : boxId,
-        status: "pago", createdBy: currentUserEmail,
+        status: "pago", paymentDate: hoje, createdBy: currentUserEmail,
       }]);
     }
   };
@@ -1804,10 +1851,14 @@ export default function App() {
   };
 
   const handleConfirmCsvImport = (rows, account, status) => {
+    const statusFinal = status || "pago";
     const newTxs = rows.map((r) => ({
       id: uid(), description: r.description, amount: r.amount, date: r.date, type: r.type,
       category: r.category,
-      account, status: status || "pago", createdBy: currentUserEmail,
+      account, status: statusFinal,
+      // Extrato é registro do que já aconteceu: o pagamento é da própria data.
+      paymentDate: statusFinal === "pago" ? r.date : "",
+      createdBy: currentUserEmail,
     }));
     const avisar = avisarComDesfazer(`${newTxs.length} lançamento${newTxs.length !== 1 ? "s" : ""} importado${newTxs.length !== 1 ? "s" : ""} com sucesso.`);
     setTransactions((prev) => [...prev, ...newTxs]);
@@ -2336,7 +2387,9 @@ export default function App() {
                       onClick={() => handleTogglePaid(t)}
                       className={`rz-stamp rz-focus ${t.status === "pago" ? "rz-stamp-pago" : "rz-stamp-pendente"}`}
                       style={{ cursor: "pointer" }}
-                      title={t.status === "pago" ? "Clique para marcar como pendente" : "Clique para marcar como pago"}
+                      title={t.status === "pago"
+                        ? `${t.paymentDate ? `Pago em ${formatDateBR(t.paymentDate)}. ` : ""}Clique para marcar como pendente`
+                        : "Clique para marcar como pago"}
                     >
                       {ehTransf
                         ? (t.status === "pago" ? "Concluída" : "Agendada")
@@ -2384,6 +2437,19 @@ export default function App() {
                     </div>
                   );
 
+                  // Segunda linha da coluna de data: quando o dinheiro saiu.
+                  // Só aparece no que está pago e tem a data registrada — o
+                  // histórico anterior a este campo continua mostrando uma data só.
+                  const pagoEm = t.status === "pago" && t.paymentDate ? (
+                    <span
+                      className="rz-mono text-[10px] leading-tight block"
+                      style={{ color: "var(--emerald)" }}
+                      title={`Pago em ${formatDateBR(t.paymentDate)}`}
+                    >
+                      pago {formatDateBR(t.paymentDate).slice(0, 5)}
+                    </span>
+                  ) : null;
+
                   const anterior = i > 0 ? visibleTransactions[i - 1] : null;
                   const mostrarSeparador = sortBy.startsWith("data") && (!anterior || anterior.date !== t.date);
 
@@ -2421,7 +2487,10 @@ export default function App() {
                         </div>
                         <div className="flex items-center justify-between gap-2">
                           <div className="flex items-center gap-2 min-w-0">
-                            <span className="rz-mono text-xs shrink-0" style={{ color: "var(--ink-soft)" }}>{formatDateBR(t.date)}</span>
+                            <div className="shrink-0">
+                              <span className="rz-mono text-xs block" style={{ color: "var(--ink-soft)" }}>{formatDateBR(t.date)}</span>
+                              {pagoEm}
+                            </div>
                             {statusBtn}
                           </div>
                           <span className="rz-mono text-sm font-semibold shrink-0" style={{ color: corValor }}>
@@ -2452,7 +2521,10 @@ export default function App() {
                             <div className="text-xs" style={{ color: "var(--ink-soft)" }}>{subtitulo}</div>
                           </div>
                         </div>
-                        <div className="rz-mono text-xs w-20 shrink-0" style={{ color: "var(--ink-soft)" }}>{formatDateBR(t.date)}</div>
+                        <div className="w-20 shrink-0">
+                          <div className="rz-mono text-xs" style={{ color: "var(--ink-soft)" }}>{formatDateBR(t.date)}</div>
+                          {pagoEm}
+                        </div>
                         <div className="w-24 shrink-0 flex justify-start">{statusBtn}</div>
                         <div className="rz-mono text-sm font-semibold w-28 text-right shrink-0" style={{ color: corValor }}>
                           {sinalValor}{formatCurrency(t.amount)}
@@ -2530,10 +2602,30 @@ export default function App() {
                   <input className="rz-input rz-focus rz-mono" inputMode="decimal" placeholder="0,00" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} />
                 </div>
                 <div className="flex-1">
-                  <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Data</label>
+                  <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Data do lançamento</label>
                   <input type="date" className="rz-input rz-focus rz-mono" value={form.date} onChange={(e) => { handleDateChange(e.target.value); setDuplicataConfirmada(false); }} />
                 </div>
               </div>
+
+              {/* A data de pagamento só existe para o que já foi pago. Vem
+                  preenchida sozinha, mas dá para corrigir — conta que venceu
+                  dia 5 e foi paga dia 12 fica com as duas datas certas. */}
+              {form.status === "pago" && (
+                <div>
+                  <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Data de pagamento</label>
+                  <input
+                    type="date"
+                    className="rz-input rz-focus rz-mono"
+                    value={form.paymentDate || ""}
+                    onChange={(e) => setForm({ ...form, paymentDate: e.target.value })}
+                  />
+                  {form.paymentDate && form.paymentDate !== form.date && (
+                    <p className="text-xs mt-1 rz-mono" style={{ color: "var(--ink-soft)" }}>
+                      {form.paymentDate > form.date ? "Pago depois do lançamento." : "Pago adiantado."}
+                    </p>
+                  )}
+                </div>
+              )}
 
               {!editingId && form.type === "despesa" && (
                 <div>
@@ -2677,7 +2769,7 @@ export default function App() {
                   </div>
                   <div>
                     <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Status</label>
-                    <select className="rz-input rz-focus" value={form.status} onChange={(e) => { setForm({ ...form, status: e.target.value }); setStatusTocado(true); }}>
+                    <select className="rz-input rz-focus" value={form.status} onChange={(e) => handleStatusChange(e.target.value)}>
                       <option value="pago">Concluída</option>
                       <option value="pendente">Agendada</option>
                     </select>
@@ -2697,7 +2789,7 @@ export default function App() {
                   </div>
                   <div className="flex-1">
                     <label className="text-xs font-medium block mb-1" style={{ color: "var(--ink-soft)" }}>Status</label>
-                    <select className="rz-input rz-focus" value={form.status} onChange={(e) => { setForm({ ...form, status: e.target.value }); setStatusTocado(true); }}>
+                    <select className="rz-input rz-focus" value={form.status} onChange={(e) => handleStatusChange(e.target.value)}>
                       <option value="pago">Pago</option>
                       <option value="pendente">Pendente</option>
                     </select>
