@@ -39,19 +39,6 @@ function VisaoGeralTab({
   // Sem faturas nem dívidas, "Total disponível" e "Patrimônio" seriam o mesmo número.
   const temPassivos = totalFaturas > 0 || dividasResumo.aPagar > 0 || dividasResumo.aReceber > 0;
 
-  const saldoProjetado = useMemo(() => {
-    const endOfPeriod = periodMode === "todos"
-      ? new Date(8640000000000000)
-      : new Date(refDate.getFullYear(), refDate.getMonth() + 1, 0, 23, 59, 59);
-    const pendentes = transactions
-      .filter((t) => t.status === "pendente" && new Date(t.date + "T00:00:00") <= endOfPeriod)
-      .reduce((s, t) => s + efeitoNoSaldoGeral(t, cardIds), 0);
-    const fixasNaoLancadas = periodMode === "todos" ? 0 : enrichFixedBills(fixedBills, transactions, refDate)
-      .filter((b) => b.active && b.status !== "lancada" && b.aplicaNesteMes)
-      .reduce((s, b) => s + (b.type === "receita" ? b.amount : -b.amount), 0);
-    return saldoTotal + pendentes + fixasNaoLancadas;
-  }, [transactions, fixedBills, refDate, periodMode, saldoTotal, cardIds]);
-
   const pendingFixedBills = useMemo(() => {
     return enrichFixedBills(fixedBills, transactions, refDate)
       .filter((b) => b.active && b.type === "despesa" && b.status !== "lancada" && b.aplicaNesteMes)
@@ -268,7 +255,7 @@ function VisaoGeralTab({
             <h2 className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: "var(--ink-soft)" }}>
               {periodMode === "todos" ? "Todos os períodos" : MONTHS[refDate.getMonth()] + " / " + refDate.getFullYear()}
             </h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 items-stretch">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 items-stretch">
               <button onClick={() => verLancamentos({ tipo: "receita" })} className="rz-focus text-left" title="Ver receitas do período">
                 <SummaryCard label="Receitas" value={totals.receitas} icon={TrendingUp} tone="emerald"
                   rodape={<Variacao valor={variacao(totals.receitas, mesAnterior.receitas)} />} />
@@ -279,8 +266,6 @@ function VisaoGeralTab({
               </button>
               <SummaryCard label="Resultado do período" value={totals.saldo} icon={Scale} tone={totals.saldo >= 0 ? "emerald" : "brick"}
                 rodape={<span className="text-[11px]" style={{ color: "var(--ink-soft)" }}>receitas − despesas</span>} />
-              <SummaryCard label="Saldo projetado ao fim" value={saldoProjetado} icon={Scale} tone={saldoProjetado >= 0 ? "emerald" : "brick"}
-                rodape={<span className="text-[11px]" style={{ color: "var(--ink-soft)" }}>com pendentes e fixas</span>} />
             </div>
           </div>
 
