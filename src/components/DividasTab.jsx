@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Check, HandCoins, Pencil, Plus, RotateCcw, Trash2, TrendingDown, TrendingUp, X } from "lucide-react";
-import { formatCurrency, formatDateBR } from "../lib/format";
+import { formatCurrency, formatDateBR, parseMoedaBR } from "../lib/format";
 import { SummaryCard } from "./common";
 
 function DividasTab({ debts, debtForm, setDebtForm, showDebtForm, editingDebtId, debtError, onOpenNew, onOpenEdit, onSubmit, onDelete, onCancelForm, onPayment, onToggleSettled, categoriesByType, banksList }) {
@@ -155,7 +155,7 @@ function EstrategiaQuitacao({ dividas }) {
   const [metodo, setMetodo] = useState("avalanche");
 
   const totalDevido = dividas.reduce((s, d) => s + (d.amount - (d.paid || 0)), 0);
-  const valorExtra = parseFloat(String(extra).replace(",", ".")) || 0;
+  const valorExtra = parseMoedaBR(extra);
 
   // Bola de neve: menor saldo primeiro (ganho psicológico).
   // Avalanche: maior juros primeiro (economiza mais dinheiro).
@@ -279,7 +279,7 @@ function DebtCard({ debt, onEdit, onDelete, onPayment, onToggleSettled, categori
   const categoriasDisponiveis = (categoriasByTypeSafe(categoriesByType, tipoLanc));
 
   const registrar = () => {
-    const v = parseFloat(String(valor).replace(",", "."));
+    const v = parseMoedaBR(valor);
     if (!v || v <= 0) return;
     if (gerarLancamento && !categoria) return;
     onPayment(debt.id, v, gerarLancamento, categoria, conta);

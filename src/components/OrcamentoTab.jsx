@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Check, History, Pencil, Plus, Repeat, Target, Trash2, TrendingDown, X } from "lucide-react";
-import { formatCurrency } from "../lib/format";
+import { formatCurrency, parseMoedaBR, paraCampoMoeda } from "../lib/format";
 import { PeriodNavigator, SummaryCard } from "./common";
 
 function OrcamentoTab({ budgets, periodFiltered, refDate, shiftMonth, categoriesByType, findCategory, budgetForm, setBudgetForm, budgetError, onAdd, onUpdateLimit, onDelete, onToggleRollover, transactions, banksList, findBank }) {
@@ -169,7 +169,7 @@ function OrcamentoTab({ budgets, periodFiltered, refDate, shiftMonth, categories
 
 function BudgetRow({ budget, spent, category, ehConta, credito, onUpdateLimit, onDelete, onToggleRollover, mesAtual, diaDeHoje, diasNoMes }) {
   const [editing, setEditing] = useState(false);
-  const [tempLimit, setTempLimit] = useState(String(budget.limit));
+  const [tempLimit, setTempLimit] = useState(paraCampoMoeda(budget.limit));
 
   const limiteEfetivo = budget.limit + credito;
   const pct = limiteEfetivo > 0 ? (spent / limiteEfetivo) * 100 : 0;
@@ -180,7 +180,7 @@ function BudgetRow({ budget, spent, category, ehConta, credito, onUpdateLimit, o
   const vaiEstourar = projecao !== null && projecao > limiteEfetivo && spent <= limiteEfetivo;
 
   const saveEdit = () => {
-    const num = parseFloat(String(tempLimit).replace(",", "."));
+    const num = parseMoedaBR(tempLimit);
     if (num && num > 0) { onUpdateLimit(budget.id, num); setEditing(false); }
   };
 
@@ -205,7 +205,7 @@ function BudgetRow({ budget, spent, category, ehConta, credito, onUpdateLimit, o
             >
               <Repeat size={13} />
             </button>
-            <button onClick={() => { setTempLimit(String(budget.limit)); setEditing(true); }} className="rz-focus p-1 rounded-md" aria-label="Editar limite" style={{ color: "var(--ink-soft)" }}>
+            <button onClick={() => { setTempLimit(paraCampoMoeda(budget.limit)); setEditing(true); }} className="rz-focus p-1 rounded-md" aria-label="Editar limite" style={{ color: "var(--ink-soft)" }}>
               <Pencil size={13} />
             </button>
             <button onClick={() => onDelete(budget)} className="rz-focus p-1 rounded-md" aria-label="Excluir orçamento" title="Excluir este orçamento" style={{ color: "var(--ink-soft)" }}>

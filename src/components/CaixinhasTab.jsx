@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Archive, Check, ChevronLeft, ChevronRight, History, Landmark, Minus, PartyPopper, Pencil, PiggyBank, Plus, Repeat, RotateCcw, Target, Trash2, X } from "lucide-react";
 import { COLOR_PALETTE, MONTHS } from "../lib/constants";
-import { formatCurrency, formatDateBR } from "../lib/format";
+import { formatCurrency, formatDateBR, parseMoedaBR, paraCampoMoeda } from "../lib/format";
 import { SummaryCard } from "./common";
 
 function CaixinhasTab({ boxes, savingsForm, setSavingsForm, savingsError, onAdd, onDelete, onContribute, onDeleteHistoryEntry, onUpdate, onArchive, onMove, onTransfer, onAdjust, banksList }) {
@@ -17,7 +17,7 @@ function CaixinhasTab({ boxes, savingsForm, setSavingsForm, savingsError, onAdd,
   const totalPlanejado = ativas.reduce((s, b) => s + (b.monthlyPlan || 0), 0);
 
   const confirmarTransferencia = () => {
-    const v = parseFloat(String(transfer.valor).replace(",", "."));
+    const v = parseMoedaBR(transfer.valor);
     if (!transfer.origem || !transfer.destino) { setTransferError("Escolha origem e destino."); return; }
     if (transfer.origem === transfer.destino) { setTransferError("Origem e destino precisam ser diferentes."); return; }
     if (!v || v <= 0) { setTransferError("Informe um valor."); return; }
@@ -189,9 +189,9 @@ function CaixinhaCard({ box, primeira, ultima, onDelete, onContribute, onDeleteH
   const [showHistory, setShowHistory] = useState(false);
   const [showSim, setShowSim] = useState(false);
   const [editandoAlvo, setEditandoAlvo] = useState(false);
-  const [tempAlvo, setTempAlvo] = useState(box.targetAmount ? String(box.targetAmount) : "");
+  const [tempAlvo, setTempAlvo] = useState(paraCampoMoeda(box.targetAmount));
   const [tempPrazo, setTempPrazo] = useState(box.deadline || "");
-  const [tempPlano, setTempPlano] = useState(box.monthlyPlan ? String(box.monthlyPlan) : "");
+  const [tempPlano, setTempPlano] = useState(paraCampoMoeda(box.monthlyPlan));
 
   const history = box.history || [];
   const temAlvo = box.targetAmount > 0;
@@ -223,17 +223,29 @@ function CaixinhaCard({ box, primeira, ultima, onDelete, onContribute, onDeleteH
   const dataSim = mesesSim ? new Date(new Date().getFullYear(), new Date().getMonth() + mesesSim, 1) : null;
 
   const submitDelta = (sign) => {
-    const num = parseFloat(String(amount).replace(",", "."));
+    const num = parseMoedaBR(amount);
     if (!num || num <= 0) return;
     onContribute(box.id, num * sign, contaOrigem);
     setAmount("");
   };
 
+  // O parseMoedaBR devolve 0 tanto para "0" quanto para "abc" — e aqui os dois
+  // significam coisas opostas: um é zerar a caixinha de propósito, o outro é um
+  // dedo errado no celular. Exigir ao menos um dígito separa os casos; sem isso,
+  // um typo apagaria dinheiro do patrimônio sem confirmação nem desfazer.
+  const salvarSaldo = () => {
+    if (!/\d/.test(tempSaldo)) return;
+    const v = parseMoedaBR(tempSaldo);
+    if (v < 0) return;
+    onAdjust(box.id, v);
+    setEditandoSaldo(false);
+  };
+
   const salvarAlvo = () => {
     onUpdate(box.id, {
-      targetAmount: parseFloat(String(tempAlvo).replace(",", ".")) || null,
+      targetAmount: parseMoedaBR(tempAlvo) || null,
       deadline: tempPrazo,
-      monthlyPlan: parseFloat(String(tempPlano).replace(",", ".")) || null,
+      monthlyPlan: parseMoedaBR(tempPlano) || null,
     });
     setEditandoAlvo(false);
   };
@@ -248,7 +260,7 @@ function CaixinhaCard({ box, primeira, ultima, onDelete, onContribute, onDeleteH
         <div className="flex items-center gap-0.5 shrink-0">
           <button onClick={() => onMove(box.id, -1)} disabled={primeira} className="rz-focus p-1 rounded-md disabled:opacity-25" aria-label="Mover para cima" title="Mover para cima" style={{ color: "var(--ink-soft)" }}><ChevronLeft size={13} style={{ transform: "rotate(90deg)" }} /></button>
           <button onClick={() => onMove(box.id, 1)} disabled={ultima} className="rz-focus p-1 rounded-md disabled:opacity-25" aria-label="Mover para baixo" title="Mover para baixo" style={{ color: "var(--ink-soft)" }}><ChevronRight size={13} style={{ transform: "rotate(90deg)" }} /></button>
-          <button onClick={() => { setTempAlvo(box.targetAmount ? String(box.targetAmount) : ""); setTempPrazo(box.deadline || ""); setTempPlano(box.monthlyPlan ? String(box.monthlyPlan) : ""); setEditandoAlvo(true); }} className="rz-focus p-1 rounded-md" aria-label="Definir alvo e prazo" title="Definir alvo, prazo e aporte mensal" style={{ color: "var(--ink-soft)" }}><Pencil size={13} /></button>
+          <button onClick={() => { setTempAlvo(paraCampoMoeda(box.targetAmount)); setTempPrazo(box.deadline || ""); setTempPlano(paraCampoMoeda(box.monthlyPlan)); setEditandoAlvo(true); }} className="rz-focus p-1 rounded-md" aria-label="Definir alvo e prazo" title="Definir alvo, prazo e aporte mensal" style={{ color: "var(--ink-soft)" }}><Pencil size={13} /></button>
           <button onClick={() => onArchive(box.id)} className="rz-focus p-1 rounded-md" aria-label="Arquivar" title="Arquivar (guarda o histórico, some da lista)" style={{ color: "var(--ink-soft)" }}><Archive size={13} /></button>
           <button onClick={() => onDelete(box)} className="rz-focus p-1 rounded-md" aria-label="Excluir" title="Excluir caixinha" style={{ color: "var(--ink-soft)" }}><Trash2 size={13} /></button>
         </div>
@@ -287,13 +299,13 @@ function CaixinhaCard({ box, primeira, ultima, onDelete, onContribute, onDeleteH
                   value={tempSaldo}
                   onChange={(e) => setTempSaldo(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") { const v = parseFloat(String(tempSaldo).replace(",", ".")); if (!isNaN(v) && v >= 0) { onAdjust(box.id, v); setEditandoSaldo(false); } }
+                    if (e.key === "Enter") salvarSaldo();
                     if (e.key === "Escape") setEditandoSaldo(false);
                   }}
                   autoFocus
                 />
                 <button
-                  onClick={() => { const v = parseFloat(String(tempSaldo).replace(",", ".")); if (!isNaN(v) && v >= 0) { onAdjust(box.id, v); setEditandoSaldo(false); } }}
+                  onClick={salvarSaldo}
                   className="rz-focus p-1.5 rounded-md" style={{ color: "var(--emerald)" }} aria-label="Salvar saldo" title="Salvar novo saldo"
                 ><Check size={16} /></button>
                 <button onClick={() => setEditandoSaldo(false)} className="rz-focus p-1.5 rounded-md" style={{ color: "var(--ink-soft)" }} aria-label="Cancelar" title="Cancelar edição"><X size={16} /></button>
@@ -305,7 +317,7 @@ function CaixinhaCard({ box, primeira, ultima, onDelete, onContribute, onDeleteH
           ) : (
             <div className="flex items-baseline justify-between mb-2 gap-2">
               <button
-                onClick={() => { setTempSaldo(String(atual)); setEditandoSaldo(true); }}
+                onClick={() => { setTempSaldo(paraCampoMoeda(atual)); setEditandoSaldo(true); }}
                 className="rz-focus rz-mono text-xl font-semibold text-left"
                 style={{ color: done ? "var(--emerald)" : "var(--ink)", borderBottom: "1px dashed var(--line)" }}
                 title="Clique para corrigir o saldo (ex: rendimento do banco)"
@@ -336,7 +348,7 @@ function CaixinhaCard({ box, primeira, ultima, onDelete, onContribute, onDeleteH
 
           {!temAlvo && (
             <button
-              onClick={() => { setTempAlvo(""); setTempPrazo(""); setTempPlano(box.monthlyPlan ? String(box.monthlyPlan) : ""); setEditandoAlvo(true); }}
+              onClick={() => { setTempAlvo(""); setTempPrazo(""); setTempPlano(paraCampoMoeda(box.monthlyPlan)); setEditandoAlvo(true); }}
               className="rz-focus text-xs mb-3 flex items-center gap-1.5"
               style={{ color: "var(--ink-soft)" }}
             >

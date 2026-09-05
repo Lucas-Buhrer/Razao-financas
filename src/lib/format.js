@@ -114,3 +114,20 @@ export function contraste(corA, corB) {
   const escuro = Math.min(a, b);
   return (claro + 0.05) / (escuro + 0.05);
 }
+
+// Valor guardado → texto para um campo de edição.
+//
+// `String(1234.56)` devolve "1234.56", com ponto decimal, que é o formato
+// americano — num app em pt-BR isso convida o usuário a "corrigir" para
+// "1.234,56", e era justamente essa correção que o parseFloat cru destruía.
+// Mostrar já no formato que a pessoa reconhece tira o motivo de mexer.
+// O parseMoedaBR lê os dois formatos de volta, então a ida é só apresentação.
+//
+// Zero vira string vazia de propósito: nesses campos ele significa "não
+// preenchido" (sem alvo, sem limite, sem saldo inicial), e o placeholder
+// comunica isso melhor que um "0" solto.
+export function paraCampoMoeda(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n === 0) return "";
+  return n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}

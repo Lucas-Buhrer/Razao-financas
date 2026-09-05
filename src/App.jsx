@@ -4,7 +4,7 @@ import { storage } from "./storage";
 import { supabase } from "./supabaseClient";
 import { uploadReceipt, getReceiptUrl, deleteReceipt, validarComprovante } from "./receipts";
 import { CATEGORIES, DEFAULT_BANKS, NAV_ITEMS, COLOR_PALETTE, DEFAULT_SAVINGS_SEED, DEFAULT_THEME, THEME_PRESETS, emptyForm, emptyFixedForm, emptyDebtForm } from "./lib/constants";
-import { uid, todayISO, formatCurrency, formatDateBR, dateToISO, colorForEmail, isDarkTheme, parseMoedaBR, clampDia } from "./lib/format";
+import { uid, todayISO, formatCurrency, formatDateBR, dateToISO, colorForEmail, isDarkTheme, parseMoedaBR, paraCampoMoeda, clampDia } from "./lib/format";
 import { downloadCsv, chaveDuplicata, buildCategoryMemory, normalizeDesc, addMonthsToDateISO } from "./lib/csv";
 import { periodKeyOf, getAmountForPeriod, enrichFixedBills, billAppliesTo, cicloDaFatura } from "./lib/finance";
 import { SummaryCard, PeriodNavigator, PlaceholderTab } from "./components/common";
@@ -882,7 +882,7 @@ export default function App() {
 
   const openEditForm = (t) => {
     setForm({
-      description: t.description, amount: String(t.amount), date: t.date, type: t.type,
+      description: t.description, amount: paraCampoMoeda(t.amount), date: t.date, type: t.type,
       // Lançamentos antigos (anteriores a este campo) não têm data de pagamento
       // guardada; para os que já estão pagos, sugerimos a data do lançamento.
       paymentDate: t.paymentDate || (t.status === "pago" ? t.date : ""),
@@ -1150,7 +1150,7 @@ export default function App() {
   const resetDebtForm = () => { setDebtForm(emptyDebtForm); setEditingDebtId(null); setDebtError(""); };
   const openNewDebtForm = () => { resetDebtForm(); setShowDebtForm(true); };
   const openEditDebtForm = (d) => {
-    setDebtForm({ person: d.person, amount: String(d.amount), direction: d.direction, date: d.date, dueDate: d.dueDate || "", notes: d.notes || "", interestRate: d.interestRate ? String(d.interestRate) : "" });
+    setDebtForm({ person: d.person, amount: paraCampoMoeda(d.amount), direction: d.direction, date: d.date, dueDate: d.dueDate || "", notes: d.notes || "", interestRate: d.interestRate ? String(d.interestRate) : "" });
     setEditingDebtId(d.id);
     setShowDebtForm(true);
   };
@@ -1555,7 +1555,7 @@ export default function App() {
   const openNewFixedForm = () => { resetFixedForm(); setShowFixedForm(true); };
   const openEditFixedForm = (bill) => {
     setFixedForm({
-      description: bill.description, amount: String(getAmountForPeriod(bill, refDate)),
+      description: bill.description, amount: paraCampoMoeda(getAmountForPeriod(bill, refDate)),
       type: bill.type, category: bill.category, account: bill.account || "", dueDay: String(bill.dueDay),
       frequency: bill.frequency || "mensal", endPeriod: bill.endPeriod || "", autoLaunch: !!bill.autoLaunch,
     });

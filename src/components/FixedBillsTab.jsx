@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { AlertCircle, Check, Copy, History, PauseCircle, Pencil, PlayCircle, Plus, Repeat, Trash2, TrendingUp, X } from "lucide-react";
 import { FIXED_STATUS_CLASS, FIXED_STATUS_LABEL, MONTHS } from "../lib/constants";
-import { formatCurrency, formatDateBR, dateToISO } from "../lib/format";
+import { formatCurrency, formatDateBR, dateToISO, parseMoedaBR, paraCampoMoeda } from "../lib/format";
 import { enrichFixedBills, FREQUENCIAS, custoMensalEquivalente, getAmountForPeriod } from "../lib/finance";
 import { PeriodNavigator, SummaryCard } from "./common";
 
@@ -73,12 +73,12 @@ function FixedBillsTab({
   const abrirLancamento = (b) => {
     const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
     setLancando(b);
-    setValorLanc(String(b.amount));
+    setValorLanc(paraCampoMoeda(b.amount));
     setStatusLanc(b.dueDate > hoje ? "pendente" : "pago");
   };
 
   const confirmarLancamento = () => {
-    const v = parseFloat(String(valorLanc).replace(",", "."));
+    const v = parseMoedaBR(valorLanc);
     if (!v || v <= 0) return;
     onLaunch(lancando, v, statusLanc);
     setLancando(null);

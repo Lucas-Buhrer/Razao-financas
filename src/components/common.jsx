@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Archive, Check, ChevronLeft, ChevronRight, Pencil, RotateCcw, Trash2, X } from "lucide-react";
 import { COLOR_PALETTE, MONTHS } from "../lib/constants";
-import { clampDia, formatCurrency, parseMoedaBR } from "../lib/format";
+import { clampDia, formatCurrency, paraCampoMoeda, parseMoedaBR } from "../lib/format";
 
 function SummaryCard({ label, value, icon: Icon, tone, rodape }) {
   const toneColor = tone === "emerald" ? "var(--emerald)" : "var(--brick)";
@@ -62,19 +62,19 @@ function CategoryRow({
   const [erro, setErro] = useState("");
   const [tempLabel, setTempLabel] = useState(cat.label);
   const [tempColor, setTempColor] = useState(cat.color);
-  const [tempInitial, setTempInitial] = useState(String(cat.initialBalance ?? ""));
+  const [tempInitial, setTempInitial] = useState(paraCampoMoeda(cat.initialBalance));
   const [tempKind, setTempKind] = useState(cat.kind || "conta");
   const [tempClosing, setTempClosing] = useState(cat.closingDay ? String(cat.closingDay) : "");
   const [tempDue, setTempDue] = useState(cat.dueDay ? String(cat.dueDay) : "");
-  const [tempLimit, setTempLimit] = useState(cat.creditLimit ? String(cat.creditLimit) : "");
+  const [tempLimit, setTempLimit] = useState(paraCampoMoeda(cat.creditLimit));
 
   const startEdit = () => {
     setTempLabel(cat.label); setTempColor(cat.color);
-    setTempInitial(String(cat.initialBalance ?? ""));
+    setTempInitial(paraCampoMoeda(cat.initialBalance));
     setTempKind(cat.kind || "conta");
     setTempClosing(cat.closingDay ? String(cat.closingDay) : "");
     setTempDue(cat.dueDay ? String(cat.dueDay) : "");
-    setTempLimit(cat.creditLimit ? String(cat.creditLimit) : "");
+    setTempLimit(paraCampoMoeda(cat.creditLimit));
     setErro("");
     setEditing(true);
   };
