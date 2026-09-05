@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { BookOpen, Receipt, Plus, Trash2, Pencil, X, Check, Search, TrendingUp, TrendingDown, Scale, Undo2, Menu, LogOut, FileUp, FileDown, Copy, Paperclip, Loader2, Layers, Repeat } from "lucide-react";
 import { storage } from "./storage";
 import { supabase } from "./supabaseClient";
@@ -7,6 +7,8 @@ import { CATEGORIES, DEFAULT_BANKS, NAV_ITEMS, COLOR_PALETTE, DEFAULT_SAVINGS_SE
 import { uid, todayISO, formatCurrency, formatDateBR, dateToISO, colorForEmail, isDarkTheme, parseMoedaBR, paraCampoMoeda, clampDia } from "./lib/format";
 import { downloadCsv, chaveDuplicata, buildCategoryMemory, normalizeDesc, addMonthsToDateISO } from "./lib/csv";
 import { periodKeyOf, getAmountForPeriod, enrichFixedBills, billAppliesTo, cicloDaFatura } from "./lib/finance";
+import { mesclarPorId, manterLocal } from "./lib/merge";
+import { useDadoSincronizado } from "./hooks/useDadoSincronizado";
 import { SummaryCard, PeriodNavigator, PlaceholderTab } from "./components/common";
 import { VisaoGeralTab } from "./components/VisaoGeralTab";
 import { FixedBillsTab } from "./components/FixedBillsTab";
@@ -28,6 +30,9 @@ import { CsvImportModal } from "./components/CsvImportModal";
 
 
 export default function App() {
+  const [toast, setToast] = useState(null);
+  const toastTimer = useRef(null);
+
   const [activeTab, setActiveTab] = useState("lancamentos");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
@@ -70,44 +75,62 @@ export default function App() {
 
   const [theme, setTheme] = useState(DEFAULT_THEME);
   const [themeLoaded, setThemeLoaded] = useState(false);
+  // O tema e preferencia de cada um e nao passa pelo hook de sincronizacao —
+  // mas, falhando ao gravar, entra na mesma tarja que o resto.
+  const [erroPreferencia, setErroPreferencia] = useState(null);
   const [seguirSistema, setSeguirSistema] = useState(false);
 
-  const [transactions, setTransactions] = useState([]);
-  const [loaded, setLoaded] = useState(false);
-  const [loadError, setLoadError] = useState(false);
+  // Cada bloco abaixo mora numa chave do Supabase e e sincronizado pelo
+  // useDadoSincronizado: grava conferindo a versao e, quando outra pessoa da
+  // familia gravou no meio, mescla os dois lados em vez de escolher um.
+  // As listas com id usam merge de tres vias; as preferencias, o ultimo a mexer.
+  const aoMesclar = useCallback(() => {
+    setToast({ message: "Havia alteracoes de outro membro da familia — juntamos com as suas." });
+  }, []);
+  const comoLista = { mesclar: mesclarPorId, aoMesclar };
+  // Preferencias (ordens, ocultos, filtros de indicador) nao mesclam: o ultimo a
+  // mexer manda. Por isso tambem nao revalidam ao focar — com manterLocal, isso
+  // so geraria uma reescrita do valor local a cada volta para a aba, sem ganho.
+  // E nao avisam por toast: nao houve juncao nenhuma para contar.
+  const comoPreferencia = { mesclar: manterLocal, revalidarAoFocar: false };
 
-  const [customCategories, setCustomCategories] = useState([]);
-  const [categoriesLoaded, setCategoriesLoaded] = useState(false);
+  const [transactions, setTransactions, syncLancamentos] = useDadoSincronizado("lancamentos", [], comoLista);
+  const loaded = syncLancamentos.carregado;
+
+  const [customCategories, setCustomCategories, syncCategorias] = useDadoSincronizado("categorias_personalizadas", [], comoLista);
+  const [hiddenDefaultCategories, setHiddenDefaultCategories] = useDadoSincronizado("categorias_padrao_ocultas", [], comoPreferencia);
+  const [categoryOrder, setCategoryOrder] = useDadoSincronizado("ordem_categorias", { receita: [], despesa: [] }, comoPreferencia);
+  // Categorias que nao representam ganho nem gasto de verdade — reembolso,
+  // venda de um movel usado, dinheiro que so foi e voltou. Continuam normais na
+  // lista de Lancamentos; ficam de fora apenas das contas do Relatorios.
+  const [categoriasForaIndicadores, setCategoriasForaIndicadores] = useDadoSincronizado("categorias_fora_indicadores", [], comoPreferencia);
+  const [customBanks, setCustomBanks, syncBancos] = useDadoSincronizado("bancos_personalizados", [], comoLista);
+  const [hiddenDefaultBanks, setHiddenDefaultBanks] = useDadoSincronizado("bancos_padrao_ocultos", [], comoPreferencia);
+  const [bankOrder, setBankOrder] = useDadoSincronizado("ordem_bancos", [], comoPreferencia);
+  const [fixedBills, setFixedBills, syncFixas] = useDadoSincronizado("contas_fixas", [], comoLista);
+  const fixedBillsLoaded = syncFixas.carregado;
+  const [savingsAccounts, setSavingsAccounts, syncPoupanca] = useDadoSincronizado("poupanca", [], comoLista);
+  const [budgets, setBudgets, syncOrcamentos] = useDadoSincronizado("orcamentos", [], comoLista);
+  const [debts, setDebts, syncDividas] = useDadoSincronizado("dividas", [], comoLista);
+
+  // Um erro de gravacao em qualquer bloco precisa aparecer, esteja o usuario em
+  // que aba estiver — antes a tarja so existia dentro de Lancamentos, e ficava
+  // acesa para sempre porque nada a apagava depois de um salvamento bom.
+  const sincronizacoes = [syncLancamentos, syncCategorias, syncBancos, syncFixas, syncPoupanca, syncOrcamentos, syncDividas];
+  const erroDeSync = sincronizacoes.find((s) => s.erro)?.erro || erroPreferencia || null;
+
   const [categoryForm, setCategoryForm] = useState({ label: "", type: "despesa", color: COLOR_PALETTE[0] });
   const [categoryError, setCategoryError] = useState("");
-  const [hiddenDefaultCategories, setHiddenDefaultCategories] = useState([]);
-  const [categoryOrder, setCategoryOrder] = useState({ receita: [], despesa: [] });
-  // Categorias que não representam ganho nem gasto de verdade — reembolso,
-  // venda de um móvel usado, dinheiro que só foi e voltou. Continuam normais na
-  // lista de Lançamentos; ficam de fora apenas das contas do Relatórios.
-  const [categoriasForaIndicadores, setCategoriasForaIndicadores] = useState([]);
-
-  const [customBanks, setCustomBanks] = useState([]);
-  const [banksLoaded, setBanksLoaded] = useState(false);
   const [bankForm, setBankForm] = useState({ label: "", color: COLOR_PALETTE[0], initialBalance: "", kind: "conta", closingDay: "", dueDay: "", creditLimit: "" });
   const [bankError, setBankError] = useState("");
-  const [hiddenDefaultBanks, setHiddenDefaultBanks] = useState([]);
-  const [bankOrder, setBankOrder] = useState([]);
-
-  const [fixedBills, setFixedBills] = useState([]);
-  const [fixedBillsLoaded, setFixedBillsLoaded] = useState(false);
   const [fixedForm, setFixedForm] = useState(emptyFixedForm);
   const [showFixedForm, setShowFixedForm] = useState(false);
   const [editingFixedId, setEditingFixedId] = useState(null);
   const [fixedFormError, setFixedFormError] = useState("");
 
-  const [savingsAccounts, setSavingsAccounts] = useState([]);
-  const [savingsLoaded, setSavingsLoaded] = useState(false);
   const [savingsForm, setSavingsForm] = useState({ label: "", color: COLOR_PALETTE[0] });
   const [savingsError, setSavingsError] = useState("");
 
-  const [debts, setDebts] = useState([]);
-  const [debtsLoaded, setDebtsLoaded] = useState(false);
   const [debtForm, setDebtForm] = useState(emptyDebtForm);
   const [showDebtForm, setShowDebtForm] = useState(false);
   const [editingDebtId, setEditingDebtId] = useState(null);
@@ -120,8 +143,6 @@ export default function App() {
   const [quickForm, setQuickForm] = useState({ amount: "", description: "", category: "", type: "despesa" });
   const [quickError, setQuickError] = useState("");
 
-  const [budgets, setBudgets] = useState([]);
-  const [budgetsLoaded, setBudgetsLoaded] = useState(false);
   const [budgetForm, setBudgetForm] = useState({ kind: "categoria", categoryId: "", accountId: "", limit: "" });
   const [budgetError, setBudgetError] = useState("");
 
@@ -151,8 +172,6 @@ export default function App() {
   const [periodMode, setPeriodMode] = useState("mes");
   const [refDate, setRefDate] = useState(new Date());
 
-  const [toast, setToast] = useState(null);
-  const toastTimer = useRef(null);
 
   // ---------- Load theme ----------
   // O tema é preferência de quem está usando, não da família: fica numa chave
@@ -181,181 +200,14 @@ export default function App() {
       (async () => {
         try {
           await storage.set("tema_cores", JSON.stringify(theme), { perUser: true });
+          setErroPreferencia(null);
         } catch (e) {
-          setLoadError(true);
+          setErroPreferencia(e);
         }
       })();
     }, 500);
     return () => clearTimeout(timer);
   }, [theme, themeLoaded]);
-
-  // ---------- Load from persistent storage ----------
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await storage.get("lancamentos", false);
-        setTransactions(res && res.value ? JSON.parse(res.value) : []);
-      } catch (e) {
-        setTransactions([]);
-        setLoadError(false); // key simply doesn't exist yet — not a real error
-      } finally {
-        setLoaded(true);
-      }
-    })();
-  }, []);
-
-  // ---------- Save on every change ----------
-  useEffect(() => {
-    if (!loaded) return;
-    (async () => {
-      try {
-        const result = await storage.set("lancamentos", JSON.stringify(transactions), false);
-        if (!result) setLoadError(true);
-      } catch (e) {
-        setLoadError(true);
-      }
-    })();
-  }, [transactions, loaded]);
-
-  // ---------- Load custom categories ----------
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await storage.get("categorias_personalizadas", false);
-        setCustomCategories(res && res.value ? JSON.parse(res.value) : []);
-      } catch (e) {
-        setCustomCategories([]);
-      } finally {
-        setCategoriesLoaded(true);
-      }
-    })();
-  }, []);
-
-  // ---------- Save custom categories ----------
-  useEffect(() => {
-    if (!categoriesLoaded) return;
-    (async () => {
-      try {
-        await storage.set("categorias_personalizadas", JSON.stringify(customCategories), false);
-      } catch (e) {
-        setLoadError(true);
-      }
-    })();
-  }, [customCategories, categoriesLoaded]);
-
-  // ---------- Load/save hidden default categories ----------
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await storage.get("categorias_padrao_ocultas", false);
-        setHiddenDefaultCategories(res && res.value ? JSON.parse(res.value) : []);
-      } catch (e) {
-        setHiddenDefaultCategories([]);
-      }
-    })();
-  }, []);
-
-  useEffect(() => {
-    if (!categoriesLoaded) return;
-    (async () => {
-      try {
-        await storage.set("categorias_padrao_ocultas", JSON.stringify(hiddenDefaultCategories), false);
-      } catch (e) {
-        setLoadError(true);
-      }
-    })();
-  }, [hiddenDefaultCategories, categoriesLoaded]);
-
-  // ---------- Load/save ordem das categorias ----------
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await storage.get("ordem_categorias", false);
-        if (res && res.value) setCategoryOrder(JSON.parse(res.value));
-      } catch (e) { /* ainda não existe */ }
-    })();
-  }, []);
-
-  useEffect(() => {
-    if (!categoriesLoaded) return;
-    (async () => {
-      try {
-        await storage.set("ordem_categorias", JSON.stringify(categoryOrder), false);
-      } catch (e) {
-        setLoadError(true);
-      }
-    })();
-  }, [categoryOrder, categoriesLoaded]);
-
-  // ---------- Load/save categorias fora dos indicadores ----------
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await storage.get("categorias_fora_indicadores", false);
-        if (res && res.value) setCategoriasForaIndicadores(JSON.parse(res.value));
-      } catch (e) { /* ainda não existe */ }
-    })();
-  }, []);
-
-  useEffect(() => {
-    if (!categoriesLoaded) return;
-    (async () => {
-      try {
-        await storage.set("categorias_fora_indicadores", JSON.stringify(categoriasForaIndicadores), false);
-      } catch (e) {
-        setLoadError(true);
-      }
-    })();
-  }, [categoriasForaIndicadores, categoriesLoaded]);
-
-  // ---------- Load custom banks ----------
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await storage.get("bancos_personalizados", false);
-        setCustomBanks(res && res.value ? JSON.parse(res.value) : []);
-      } catch (e) {
-        setCustomBanks([]);
-      } finally {
-        setBanksLoaded(true);
-      }
-    })();
-  }, []);
-
-  // ---------- Save custom banks ----------
-  useEffect(() => {
-    if (!banksLoaded) return;
-    (async () => {
-      try {
-        await storage.set("bancos_personalizados", JSON.stringify(customBanks), false);
-      } catch (e) {
-        setLoadError(true);
-      }
-    })();
-  }, [customBanks, banksLoaded]);
-
-  // ---------- Load/save hidden default banks ----------
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await storage.get("bancos_padrao_ocultos", false);
-        setHiddenDefaultBanks(res && res.value ? JSON.parse(res.value) : []);
-      } catch (e) {
-        setHiddenDefaultBanks([]);
-      }
-    })();
-  }, []);
-
-  useEffect(() => {
-    if (!banksLoaded) return;
-    (async () => {
-      try {
-        await storage.set("bancos_padrao_ocultos", JSON.stringify(hiddenDefaultBanks), false);
-      } catch (e) {
-        setLoadError(true);
-      }
-    })();
-  }, [hiddenDefaultBanks, banksLoaded]);
 
   // ---------- Acompanhar claro/escuro do sistema ----------
   useEffect(() => {
@@ -392,175 +244,68 @@ export default function App() {
     })();
   }, []);
 
-  // ---------- Load/save ordem dos bancos ----------
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await storage.get("ordem_bancos");
-        if (res && res.value) setBankOrder(JSON.parse(res.value));
-      } catch (e) { /* ainda não existe */ }
-    })();
-  }, []);
+  // ---------- Caixinhas: migracao das metas antigas ----------
+  // O conteudo em si vem do hook. Aqui fica so o que precisa acontecer uma vez,
+  // depois de carregar: trazer as `metas` do modelo antigo para dentro da
+  // poupanca, semear as caixinhas padrao numa familia nova e completar os campos
+  // que registros antigos nao tem.
+  const poupancaPreparada = useRef(false);
 
   useEffect(() => {
-    if (!banksLoaded) return;
+    if (!syncPoupanca.carregado || poupancaPreparada.current) return;
+    poupancaPreparada.current = true;
+
+    const normaliza = (c, i) => ({
+      targetAmount: null, deadline: "", monthlyPlan: null, archived: false, order: i,
+      ...c,
+      currentAmount: c.currentAmount || 0,
+      history: c.history || [],
+    });
+
     (async () => {
+      let jaMigrou = false;
       try {
-        await storage.set("ordem_bancos", JSON.stringify(bankOrder));
-      } catch (e) {
-        setLoadError(true);
+        const flag = await storage.get("metas_migradas");
+        jaMigrou = !!(flag && flag.value);
+      } catch (e) { /* nao da para saber: trata como nao migrado */ }
+
+      let metas = [];
+      if (!jaMigrou) {
+        try {
+          const m = await storage.get("metas");
+          if (m && m.value) metas = JSON.parse(m.value);
+        } catch (e) { /* nao havia metas */ }
+        try { await storage.set("metas_migradas", "true"); } catch (e) { /* segue mesmo assim */ }
       }
-    })();
-  }, [bankOrder, banksLoaded]);
 
-  // ---------- Load fixed bills ----------
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await storage.get("contas_fixas", false);
-        setFixedBills(res && res.value ? JSON.parse(res.value) : []);
-      } catch (e) {
-        setFixedBills([]);
-      } finally {
-        setFixedBillsLoaded(true);
-      }
-    })();
-  }, []);
+      setSavingsAccounts((atuais) => {
+        // Sem mutar o que ja esta no estado: uma meta que aponta para uma
+        // caixinha existente vira uma copia com alvo e prazo preenchidos.
+        const porId = new Map(atuais.map((c) => [c.id, { ...c }]));
+        const novas = [];
+        metas.forEach((g) => {
+          const vinculada = g.linkedSavingsId ? porId.get(g.linkedSavingsId) : null;
+          if (vinculada) {
+            vinculada.targetAmount = g.targetAmount;
+            vinculada.deadline = g.deadline || "";
+          } else {
+            novas.push({
+              id: g.id, label: g.title, color: g.color,
+              currentAmount: g.currentAmount || 0, history: g.history || [],
+              targetAmount: g.targetAmount, deadline: g.deadline || "",
+              monthlyPlan: null, archived: false,
+            });
+          }
+        });
 
-  // ---------- Save fixed bills ----------
-  useEffect(() => {
-    if (!fixedBillsLoaded) return;
-    (async () => {
-      try {
-        await storage.set("contas_fixas", JSON.stringify(fixedBills), false);
-      } catch (e) {
-        setLoadError(true);
-      }
-    })();
-  }, [fixedBills, fixedBillsLoaded]);
-
-  // ---------- Load caixinhas (migra metas antigas para dentro da poupança) ----------
-  useEffect(() => {
-    (async () => {
-      const normaliza = (c, i) => ({
-        targetAmount: null, deadline: "", monthlyPlan: null, archived: false, order: i,
-        ...c,
-        currentAmount: c.currentAmount || 0,
-        history: c.history || [],
+        const juntas = [...porId.values(), ...novas];
+        const finais = juntas.length > 0
+          ? juntas
+          : DEFAULT_SAVINGS_SEED.map((s) => ({ id: uid(), ...s, currentAmount: 0, history: [] }));
+        return finais.map(normaliza);
       });
-
-      try {
-        let caixinhas = [];
-        try {
-          const res = await storage.get("poupanca", false);
-          if (res && res.value) caixinhas = JSON.parse(res.value);
-        } catch (e) { /* ainda não existe */ }
-
-        let jaMigrou = false;
-        try {
-          const flag = await storage.get("metas_migradas", false);
-          jaMigrou = !!(flag && flag.value);
-        } catch (e) { /* ainda não migrou */ }
-
-        if (!jaMigrou) {
-          let metas = [];
-          try {
-            const m = await storage.get("metas", false);
-            if (m && m.value) metas = JSON.parse(m.value);
-          } catch (e) { /* não havia metas */ }
-
-          metas.forEach((g) => {
-            const vinculada = g.linkedSavingsId ? caixinhas.find((c) => c.id === g.linkedSavingsId) : null;
-            if (vinculada) {
-              // Meta que já apontava para uma poupança: funde as duas
-              vinculada.targetAmount = g.targetAmount;
-              vinculada.deadline = g.deadline || "";
-            } else {
-              caixinhas.push({
-                id: g.id, label: g.title, color: g.color,
-                currentAmount: g.currentAmount || 0, history: g.history || [],
-                targetAmount: g.targetAmount, deadline: g.deadline || "",
-                monthlyPlan: null, archived: false,
-              });
-            }
-          });
-          try { await storage.set("metas_migradas", "true", false); } catch (e) { /* segue mesmo assim */ }
-        }
-
-        if (caixinhas.length === 0) {
-          caixinhas = DEFAULT_SAVINGS_SEED.map((s) => ({ id: uid(), ...s, currentAmount: 0, history: [] }));
-        }
-        setSavingsAccounts(caixinhas.map(normaliza));
-      } catch (e) {
-        setSavingsAccounts(DEFAULT_SAVINGS_SEED.map((s, i) => normaliza({ id: uid(), ...s }, i)));
-      } finally {
-        setSavingsLoaded(true);
-      }
     })();
-  }, []);
-
-  // ---------- Save savings accounts ----------
-  useEffect(() => {
-    if (!savingsLoaded) return;
-    (async () => {
-      try {
-        await storage.set("poupanca", JSON.stringify(savingsAccounts), false);
-      } catch (e) {
-        setLoadError(true);
-      }
-    })();
-  }, [savingsAccounts, savingsLoaded]);
-
-  // ---------- Load budgets ----------
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await storage.get("orcamentos", false);
-        setBudgets(res && res.value ? JSON.parse(res.value) : []);
-      } catch (e) {
-        setBudgets([]);
-      } finally {
-        setBudgetsLoaded(true);
-      }
-    })();
-  }, []);
-
-  // ---------- Save budgets ----------
-  useEffect(() => {
-    if (!budgetsLoaded) return;
-    (async () => {
-      try {
-        await storage.set("orcamentos", JSON.stringify(budgets), false);
-      } catch (e) {
-        setLoadError(true);
-      }
-    })();
-  }, [budgets, budgetsLoaded]);
-
-  // ---------- Load/save dívidas ----------
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await storage.get("dividas", false);
-        setDebts(res && res.value ? JSON.parse(res.value) : []);
-      } catch (e) {
-        setDebts([]);
-      } finally {
-        setDebtsLoaded(true);
-      }
-    })();
-  }, []);
-
-  useEffect(() => {
-    if (!debtsLoaded) return;
-    (async () => {
-      try {
-        await storage.set("dividas", JSON.stringify(debts), false);
-      } catch (e) {
-        setLoadError(true);
-      }
-    })();
-  }, [debts, debtsLoaded]);
+  }, [syncPoupanca.carregado, setSavingsAccounts]);
 
   // ---------- Lembra os filtros da aba Lançamentos ----------
   useEffect(() => {
@@ -1986,7 +1731,30 @@ export default function App() {
 
       {/* ---------------- Main ---------------- */}
       <main className="flex-1 p-5 md:p-10 max-w-6xl w-full mx-auto">
-        {!loaded || !filtrosCarregados ? (
+        {/* Erro de gravação precisa aparecer em qualquer aba: quem estiver em
+            Relatórios quando o salvamento falhar corre o mesmo risco de perder
+            o que acabou de fazer. */}
+        {erroDeSync && loaded && (
+          <div role="alert" className="rz-card p-3 mb-4 text-sm" style={{ borderColor: "var(--brick)", color: "var(--brick)" }}>
+            Não foi possível salvar suas alterações agora. Elas podem se perder ao fechar a aba — tente novamente em instantes.
+          </div>
+        )}
+
+        {erroDeSync && !loaded ? (
+          // Leitura falhou. Aqui não dá para seguir mostrando tela vazia: o app
+          // gravaria esse vazio por cima dos dados de verdade na primeira
+          // alteração. Melhor parar e pedir para recarregar.
+          <div className="rz-card p-8 text-center max-w-md mx-auto mt-16">
+            <div className="rz-display text-lg mb-1">Não consegui carregar seus dados</div>
+            <p className="text-sm mb-4" style={{ color: "var(--ink-soft)" }}>
+              Seus lançamentos continuam salvos — o problema foi só em buscá-los agora.
+              Confira sua conexão e recarregue a página.
+            </p>
+            <button onClick={() => window.location.reload()} className="rz-btn-primary rz-focus text-sm">
+              Recarregar
+            </button>
+          </div>
+        ) : !loaded || !filtrosCarregados ? (
           <div className="flex items-center gap-3 mt-20 justify-center" style={{ color: "var(--ink-soft)" }}>
             <div className="rz-mono text-sm">Carregando seus dados…</div>
           </div>
@@ -2194,12 +1962,6 @@ export default function App() {
                 Registre cada entrada e saída para manter seu razão em dia.
               </p>
             </header>
-
-            {loadError && (
-              <div className="rz-card p-3 mb-4 text-sm" style={{ borderColor: "var(--brick)", color: "var(--brick)" }}>
-                Não foi possível salvar suas alterações agora. Elas podem se perder ao fechar a aba — tente novamente em instantes.
-              </div>
-            )}
 
             <PeriodNavigator periodMode={periodMode} refDate={refDate} shiftMonth={shiftMonth} setPeriodMode={setPeriodMode} onHoje={irParaHoje} />
 

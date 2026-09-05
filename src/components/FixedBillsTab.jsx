@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { AlertCircle, Check, Copy, History, PauseCircle, Pencil, PlayCircle, Plus, Repeat, Trash2, TrendingUp, X } from "lucide-react";
 import { FIXED_STATUS_CLASS, FIXED_STATUS_LABEL, MONTHS } from "../lib/constants";
-import { formatCurrency, formatDateBR, dateToISO, parseMoedaBR, paraCampoMoeda } from "../lib/format";
+import { formatCurrency, formatDateBR, parseMoedaBR, paraCampoMoeda } from "../lib/format";
 import { enrichFixedBills, FREQUENCIAS, custoMensalEquivalente, getAmountForPeriod } from "../lib/finance";
 import { PeriodNavigator, SummaryCard } from "./common";
 
